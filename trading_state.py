@@ -1,18 +1,20 @@
 from lumibot.strategies.strategy import Strategy
+from datetime import datetime, timedelta
 from finbert_utils import estimate_sentiment
+import numpy as np
+from trading_data import store
+from oanda_trader import OandaTrader
 
 class MultiBBStrategy(Strategy):
-    # Move the strategy class here
-    # Copy all the strategy code from tradingbot.py
-    # ... (copy the entire MultiBBStrategy class here)
-    pass
+    # Move the entire MultiBBStrategy class implementation here
+    # (All the methods: initialize, calculate_bollinger_bands, etc.)
+    ...
 
 # Create a global instance that can be shared
 strategy = None
 
 def initialize_strategy(oanda_creds):
     global strategy
-    from oanda_trader import OandaTrader  # Import here to avoid circular import
     
     if strategy is None:
         strategy = MultiBBStrategy(

@@ -9,6 +9,20 @@ from oandapyV20 import API
 import pandas as pd
 import logging
 
+class OandaDataSource:
+    def __init__(self, broker):
+        self.broker = broker
+        
+    def get_datetime(self, adjust_for_delay=True):
+        return datetime.now()
+        
+    def get_last_price(self, symbol):
+        return self.broker.get_last_price(symbol)
+        
+    def get_yesterday_dividends(self, assets, quote=None):
+        """Forex doesn't have dividends, return empty dict"""
+        return {asset: 0.0 for asset in assets}
+
 class OandaTrader(Broker):
     IS_BACKTESTING_BROKER = False
     
@@ -16,7 +30,6 @@ class OandaTrader(Broker):
         self.api = API(access_token=credentials["ACCESS_TOKEN"])
         self.account_id = credentials["ACCOUNT_ID"]
         self.name = "OANDA"
-        self.IS_BACKTESTING_BROKER = False
         self.IS_PAPER_TRADING = credentials.get("ENVIRONMENT") == "practice"
         self._cash = 10000  # Default cash amount
         self._positions = {}
