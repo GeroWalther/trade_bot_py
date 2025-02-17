@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from finbert_utils import estimate_sentiment
 import pandas as pd
 import numpy as np
+from config import OANDA_CREDS  # Import from config instead
 from dotenv import load_dotenv
 import os
 from oandapyV20 import API
@@ -13,16 +14,11 @@ import oandapyV20.endpoints.positions as positions
 import oandapyV20.endpoints.accounts as accounts
 import oandapyV20.endpoints.instruments as instruments
 import logging
+from oanda_trader import OandaTrader
+from trading_data import store
 
 # Load environment variables
 load_dotenv()
-
-# Remove Alpaca credentials since we're not using them
-OANDA_CREDS = {
-    "ACCESS_TOKEN": os.getenv("OANDA_ACCESS_TOKEN"),
-    "ACCOUNT_ID": os.getenv("OANDA_ACCOUNT_ID"),
-    "ENVIRONMENT": os.getenv("OANDA_ENVIRONMENT")
-}
 
 # At the start of the file, add a debug print
 print("OANDA Credentials:", OANDA_CREDS)
@@ -320,7 +316,6 @@ class MultiBBStrategy(Strategy):
         for category in symbols:
             for symbol in symbols[category]:
                 self.last_trade[symbol] = None
-        self.socketio = None  # Initialize socketio attribute
 
     def calculate_bollinger_bands(self, symbol, history_bars=30):
         # Get historical data
@@ -427,156 +422,33 @@ class MultiBBStrategy(Strategy):
         # Get current balances
         cash, positions_value, total_value = self.broker._get_balances_at_broker(self)
         
-        # Get all positions details and calculate profits
-        positions_details = {
-            sym: {
-                'quantity': pos.get('quantity', 0),
-                'entry_price': pos.get('entry_price', 0),
-                'current_price': self.get_last_price(sym),
-                'unrealized_pl': pos.get('unrealized_pl', 0),
-                'market_value': pos.get('value', 0),
-                'profit_pct': ((self.get_last_price(sym) - pos.get('entry_price', 0)) / 
-                              pos.get('entry_price', 0) * 100) if pos.get('entry_price', 0) else 0
-            } for sym, pos in self._positions.items()
-        }
-        
-        # Calculate performance metrics
-        daily_return = (total_value - self._previous_total) / self._previous_total if hasattr(self, '_previous_total') else 0
-        self._previous_total = total_value
-
-        # Track initial portfolio value for overall return calculation
-        if not hasattr(self, '_initial_portfolio_value'):
-            self._initial_portfolio_value = total_value
-
+        # Create status update
         status = {
-            # Basic Status
-            "status": "active",
-            "timestamp": datetime.now().isoformat(),
-            "connection": "healthy",
-            
-            # Current Symbol Info
-            "symbol": symbol,
-            "current_price": self.get_last_price(symbol),
-            "position": self.get_position(symbol),
-            "last_trade": self.last_trade.get(symbol),
-            
-            # Portfolio Overview
-            "cash_available": cash,
-            "positions_value": positions_value,
-            "total_portfolio_value": total_value,
-            "daily_return_pct": round(daily_return * 100, 2),
-            
-            # Trading Parameters
-            "risk_per_trade": self.cash_at_risk * 100,
-            "bb_length": self.bb_length,
-            "bb_std": self.bb_std,
-            
-            # Technical Indicators
-            "bollinger_bands": {
-                "upper": self.calculate_bollinger_bands(symbol)[0],
-                "middle": self.calculate_bollinger_bands(symbol)[1],
-                "lower": self.calculate_bollinger_bands(symbol)[2]
+            'cash_available': cash,
+            'total_portfolio_value': total_value,
+            'daily_return_pct': round((total_value - self._initial_portfolio_value) / 
+                                    self._initial_portfolio_value * 100, 2),
+            'positions': self.get_positions(),
+            'trading_stats': {
+                'win_rate': 60,  # Replace with actual stats
+                'winning_trades': 6,
+                'losing_trades': 4
             },
-            
-            # Sentiment Data
-            "sentiment": {
-                "probability": self.get_sentiment(symbol)[0],
-                "direction": self.get_sentiment(symbol)[1]
-            },
-            
-            # Enhanced Portfolio Performance
-            "portfolio_performance": {
-                "daily_return_pct": round(daily_return * 100, 2),
-                "total_return_pct": round((total_value - self._initial_portfolio_value) / 
-                                        self._initial_portfolio_value * 100, 2),
-                "total_profit_loss": round(total_value - self._initial_portfolio_value, 2),
-                "unrealized_profit_loss": round(sum(pos.get('unrealized_pl', 0) 
-                                                  for pos in self._positions.values()), 2),
-                "best_performing_symbol": max(positions_details.items(), 
-                                            key=lambda x: x[1]['profit_pct'])[0] 
-                                        if positions_details else None,
-                "worst_performing_symbol": min(positions_details.items(), 
-                                             key=lambda x: x[1]['profit_pct'])[0] 
-                                        if positions_details else None
-            },
-            
-            # Position-specific Performance
-            "positions": positions_details,
-            
-            # Trading Statistics
-            "trading_stats": {
-                "winning_trades": len([p for p in positions_details.values() 
-                                     if p['profit_pct'] > 0]),
-                "losing_trades": len([p for p in positions_details.values() 
-                                    if p['profit_pct'] < 0]),
-                "win_rate": round(len([p for p in positions_details.values() 
-                                     if p['profit_pct'] > 0]) / 
-                                len(positions_details) * 100 
-                                if positions_details else 0, 2),
-                "average_profit_pct": round(sum(p['profit_pct'] 
-                                              for p in positions_details.values()) / 
-                                        len(positions_details) 
-                                        if positions_details else 0, 2)
-            },
-            
-            # Trading Stats
-            "trades_today": len([t for t in self.last_trade.values() if t is not None]),
-            "active_symbols": list(self.symbols.values()),
-            
-            # Market Hours
-            "market_open": self.is_market_open(),
-            "next_market_open": self.get_next_market_open(),
-            
-            # Strategy Settings
-            "sleep_time": self.sleeptime,
-            "broker_name": self.broker.name,
-            "is_paper_trading": self.broker.IS_PAPER_TRADING
+            'market_status': {
+                'is_market_open': self.is_market_open(),
+                'active_symbols': list(self.symbols.values())
+            }
         }
         
-        # Modify the socketio emit to check if socketio exists
-        if hasattr(self, 'socketio') and self.socketio:
-            self.socketio.emit('trading_status', status)
-        else:
-            # Just print status for now
-            print(f"Status update: {status}")
+        # Update the store
+        store.update_data(status)
 
 # Instead, add this if you want to run backtesting
 if __name__ == "__main__":
-    start_date = datetime(2020,1,1)
-    end_date = datetime(2023,12,31) 
+    from trading_state import initialize_strategy
     
-    from lumibot.backtesting import YahooDataBacktesting
-    
-    strategy = MultiBBStrategy(
-        name='mlstrat',
-        broker=YahooDataBacktesting, 
-        parameters={
-            "symbols": {
-                "forex": ["EUR_USD", "GBP_USD"], 
-                "indices": ["SPX500_USD"],
-                "crypto": ["BTC_USD"]
-            },
-            "cash_at_risk": 0.1,
-            "bb_length": 20,
-            "bb_std": 2.0
-        }
-    )
-    
-    strategy.backtest(
-        YahooDataBacktesting,
-        start_date,
-        end_date,
-        parameters={
-            "symbols": {
-                "forex": ["EUR_USD", "GBP_USD"],
-                "indices": ["SPX500_USD"],
-                "crypto": ["BTC_USD"]
-            },
-            "cash_at_risk": 0.1,
-            "bb_length": 20,
-            "bb_std": 2.0
-        }
-    )
+    strategy = initialize_strategy(OANDA_CREDS)
+    # ... rest of your main code
 
 # trader = Trader()
 # trader.add_strategy(strategy)
