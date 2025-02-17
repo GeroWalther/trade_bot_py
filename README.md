@@ -32,3 +32,4 @@ If you're getting an SSL error when you attempt to call out to the Alpaca Tradin
 👨🏾‍💻 Author: Nick Renotte <br />
 📅 Version: 1.x<br />
 📜 License: This project is licensed under the MIT License </br>
+# trade_bot_py
