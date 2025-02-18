@@ -109,6 +109,7 @@ class OandaTrader:
             self._subscribers.remove(subscriber)
             
     def get_last_price(self, symbol, quote=None, exchange=None):
+        """Get current price for a symbol"""
         try:
             params = {"instruments": symbol}
             r = pricing.PricingInfo(accountID=self.account_id, params=params)
@@ -128,6 +129,7 @@ class OandaTrader:
                 self._last_prices[symbol] = price
 
             return price
+        
         except Exception as e:
             logging.error(f"Error getting price for {symbol}: {e}")
             return None
@@ -307,6 +309,15 @@ class OandaTrader:
                 logging.error(f"Could not get current price for {symbol}")
                 raise Exception(f"Could not get current price for {symbol}")
             
+            # For closing positions, get the actual position quantity
+            positions = self.get_tracked_positions()
+            if symbol in positions:
+                position = positions[symbol]
+                if side == 'sell' and position['side'] == 'LONG':
+                    quantity = abs(position['quantity'])
+                elif side == 'buy' and position['side'] == 'SHORT':
+                    quantity = abs(position['quantity'])
+            
             # Convert quantity to string with proper precision
             if 'XAU' in symbol:
                 units = str(round(quantity, 3))
@@ -317,9 +328,10 @@ class OandaTrader:
             else:  # Forex
                 units = str(int(quantity))
             
-            # For sell orders, make units negative to open short position
+            # For sell orders or position closures, make units negative
             if side == 'sell':
                 units = f"-{units}"
+            
             logging.info(f"Calculated units for order: {units}")
             
             # Create OANDA order data

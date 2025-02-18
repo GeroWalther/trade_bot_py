@@ -6,6 +6,8 @@ import oandapyV20.endpoints.positions as positions
 import logging
 from datetime import datetime
 import pytz
+from trading_state import strategy, initialize_strategy
+from strategies.ema_trend import EMATrendStrategy
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -16,8 +18,14 @@ CORS(app)
 try:
     broker = OandaTrader(OANDA_CREDS)
     logger.info("Successfully initialized OANDA broker")
+    
+    # Initialize both strategies
+    bb_strategy = initialize_strategy()
+    ema_strategy = EMATrendStrategy(broker=broker)
+    
+    logger.info("Successfully initialized strategies")
 except Exception as e:
-    logger.error(f"Failed to initialize OANDA broker: {e}", exc_info=True)
+    logger.error(f"Failed to initialize broker or strategies: {e}", exc_info=True)
     raise
 
 @app.route('/execute-trade', methods=['POST'])
@@ -245,6 +253,235 @@ def get_positions():
             'status': 'error',
             'message': str(e)
         }), 500
+
+@app.route('/api/bots', methods=['GET'])
+def get_bots_status():
+    try:
+        return jsonify({
+            'status': 'success',
+            'bots': {
+                'bb_strategy': {
+                    'name': 'Bollinger Bands Strategy',
+                    'status': bb_strategy.get_status() if bb_strategy else None,
+                    'running': bb_strategy.should_continue() if bb_strategy else False,
+                    'parameters': bb_strategy.parameters if bb_strategy else None
+                },
+                'ema_strategy': {
+                    'name': 'EMA Trend Strategy',
+                    'status': ema_strategy.get_status() if ema_strategy else None,
+                    'running': ema_strategy.should_continue() if ema_strategy else False,
+                    'parameters': ema_strategy.parameters if ema_strategy else None
+                }
+            }
+        })
+    except Exception as e:
+        logger.error(f"Error getting bots status: {e}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/api/bots/<bot_id>/toggle', methods=['POST'])
+def toggle_bot(bot_id):
+    try:
+        if bot_id == 'bb_strategy':
+            if not bb_strategy:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Strategy not initialized'
+                }), 400
+                
+            current_status = bb_strategy.should_continue()
+            if current_status:
+                bb_strategy.stop()
+                new_status = 'stopped'
+            else:
+                bb_strategy._continue = True
+                new_status = 'running'
+            
+            logger.info(f"Bot {bot_id} toggled to {new_status}")
+            return jsonify({
+                'status': 'success',
+                'bot_id': bot_id,
+                'bot_status': new_status
+            })
+            
+        elif bot_id == 'ema_strategy':
+            if not ema_strategy:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Strategy not initialized'
+                }), 400
+                
+            current_status = ema_strategy.should_continue()
+            if current_status:
+                ema_strategy.stop()
+                new_status = 'stopped'
+            else:
+                ema_strategy.start()
+                new_status = 'running'
+            
+            logger.info(f"Bot {bot_id} toggled to {new_status}")
+            return jsonify({
+                'status': 'success',
+                'bot_id': bot_id,
+                'bot_status': new_status
+            })
+        
+        return jsonify({
+            'status': 'error',
+            'message': f'Bot {bot_id} not found'
+        }), 404
+        
+    except Exception as e:
+        logger.error(f"Error toggling bot {bot_id}: {str(e)}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/api/bots/<bot_id>/parameters', methods=['PUT'])
+def update_bot_parameters(bot_id):
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'status': 'error',
+                'message': 'No parameters provided'
+            }), 400
+            
+        if bot_id == 'bb_strategy':
+            if not bb_strategy:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Strategy not initialized'
+                }), 400
+                
+            # Validate parameters
+            valid_params = {'bb_length', 'bb_std', 'cash_at_risk'}
+            invalid_params = set(data.keys()) - valid_params
+            if invalid_params:
+                return jsonify({
+                    'status': 'error',
+                    'message': f'Invalid parameters: {invalid_params}'
+                }), 400
+                
+            # Update parameters
+            bb_strategy.parameters.update(data)
+            logger.info(f"Updated parameters for bot {bot_id}: {data}")
+            
+            return jsonify({
+                'status': 'success',
+                'bot_id': bot_id,
+                'parameters': bb_strategy.parameters
+            })
+            
+        elif bot_id == 'ema_strategy':
+            if not ema_strategy:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Strategy not initialized'
+                }), 400
+                
+            # Handle symbol update
+            if 'symbol' in data:
+                success = ema_strategy.update_symbol(data['symbol'])
+                if not success:
+                    return jsonify({
+                        'status': 'error',
+                        'message': f'Failed to update symbol to {data["symbol"]}'
+                    }), 400
+                    
+                return jsonify({
+                    'status': 'success',
+                    'bot_id': bot_id,
+                    'parameters': ema_strategy.parameters
+                })
+                
+            # Handle other parameter updates
+            valid_params = {'ema_period', 'check_interval', 'quantity'}
+            invalid_params = set(data.keys()) - valid_params
+            if invalid_params:
+                return jsonify({
+                    'status': 'error',
+                    'message': f'Invalid parameters: {invalid_params}'
+                }), 400
+                
+            ema_strategy.parameters.update(data)
+            logger.info(f"Updated parameters for bot {bot_id}: {data}")
+            
+            return jsonify({
+                'status': 'success',
+                'bot_id': bot_id,
+                'parameters': ema_strategy.parameters
+            })
+            
+        return jsonify({
+            'status': 'error',
+            'message': f'Bot {bot_id} not found'
+        }), 404
+        
+    except Exception as e:
+        logger.error(f"Error updating bot parameters: {str(e)}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/api/bots/<bot_id>/status', methods=['GET'])
+def get_bot_status(bot_id):
+    try:
+        if bot_id == 'bb_strategy' and bb_strategy:
+            return jsonify({
+                'status': 'success',
+                'data': bb_strategy.get_status()
+            })
+        elif bot_id == 'ema_strategy' and ema_strategy:
+            return jsonify({
+                'status': 'success',
+                'data': ema_strategy.get_status()
+            })
+            
+        logger.error(f"Bot {bot_id} not found or not initialized")
+        return jsonify({
+            'status': 'error',
+            'message': f'Bot {bot_id} not found or not initialized'
+        }), 404
+    except Exception as e:
+        logger.error(f"Error getting bot status: {str(e)}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/debug/strategies')
+def debug_strategies():
+    return jsonify({
+        'bb_strategy': {
+            'initialized': bb_strategy is not None,
+            'running': bb_strategy.should_continue() if bb_strategy else False
+        },
+        'ema_strategy': {
+            'initialized': ema_strategy is not None,
+            'running': ema_strategy.should_continue() if ema_strategy else False,
+            'available_instruments': ema_strategy.available_instruments if ema_strategy else None
+        }
+    })
+
+@app.route('/')
+def index():
+    return jsonify({
+        'status': 'success',
+        'message': 'Trading server is running'
+    })
+
+# Add CORS headers to all responses
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE')
+    return response
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5002, debug=True) 

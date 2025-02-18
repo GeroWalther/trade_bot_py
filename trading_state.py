@@ -4,6 +4,11 @@ from finbert_utils import estimate_sentiment
 import numpy as np
 from trading_data import store
 from oanda_trader import OandaTrader
+from strategies.bollinger_bands import BollingerBandsStrategy
+from config import OANDA_CREDS
+import logging
+
+logger = logging.getLogger(__name__)
 
 class MultiBBStrategy(Strategy):
     def initialize(self):
@@ -114,28 +119,34 @@ class MultiBBStrategy(Strategy):
             return 0
         return (cash * risk_pct) / price
 
-# Create a global instance that can be shared
+# Initialize strategy with default parameters
 strategy = None
+broker = None
 
-def initialize_strategy(oanda_creds):
-    global strategy
-    
-    if strategy is None:
-        strategy = MultiBBStrategy(
-            name='mlstrat',
-            broker=OandaTrader(oanda_creds),
-            parameters={
-                "symbols": {
-                    "forex": ["EUR_USD"],
-                    "crypto": ["BTC_USD"]
-                },
-                "cash_at_risk": 0.1,
-                "bb_length": 20,
-                "bb_std": 2.0,
-                "timeframes": {
-                    "EUR_USD": "1D",
-                    "BTC_USD": "1Min"
+def initialize_strategy():
+    global strategy, broker
+    try:
+        # Initialize broker if not already done
+        if broker is None:
+            broker = OandaTrader(OANDA_CREDS)
+            
+        # Initialize strategy with default parameters
+        if strategy is None:
+            strategy = BollingerBandsStrategy(
+                broker=broker,
+                parameters={
+                    'bb_length': 20,
+                    'bb_std': 2.0,
+                    'cash_at_risk': 0.1
                 }
-            }
-        )
-    return strategy 
+            )
+            strategy._continue = False  # Start in stopped state
+            logger.info("Strategy initialized successfully")
+            
+        return strategy
+    except Exception as e:
+        logger.error(f"Error initializing strategy: {e}", exc_info=True)
+        return None
+
+# Initialize strategy on module import
+initialize_strategy() 
