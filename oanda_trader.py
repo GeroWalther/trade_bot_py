@@ -13,6 +13,13 @@ from queue import Queue  # Add this import at the top
 from lumibot.entities import Position  # Add this import
 from collections import deque  # Add this import
 
+class Position:
+    def __init__(self, symbol, quantity, entry_price, strategy=None):
+        self.symbol = symbol
+        self.quantity = quantity
+        self.entry_price = entry_price
+        self.strategy = strategy
+
 class OandaDataSource:
     def __init__(self, broker):
         self.broker = broker
@@ -162,13 +169,30 @@ class OandaTrader:
             tracked_positions = {}
             for position in response['positions']:
                 instrument = position['instrument']
+                current_price = self.get_last_price(instrument)
+                
+                quantity = float(position['long']['units']) if 'long' in position else float(position['short']['units'])
+                entry_price = float(position['long']['averagePrice']) if 'long' in position else float(position['short']['averagePrice'])
+                
                 tracked_positions[instrument] = {
-                    'quantity': float(position['long']['units']) if 'long' in position else float(position['short']['units']),
-                    'entry_price': float(position['long']['averagePrice']) if 'long' in position else float(position['short']['averagePrice']),
+                    'quantity': quantity,
+                    'entry_price': entry_price,
+                    'current_price': current_price,
                     'unrealized_pl': float(position['unrealizedPL']),
-                    'value': float(position['long']['units']) * float(position['long']['averagePrice']) if 'long' in position 
-                            else float(position['short']['units']) * float(position['short']['averagePrice'])
+                    'value': quantity * entry_price
                 }
+                
+                # Calculate profit/loss
+                if current_price:
+                    pl_euro = (current_price - entry_price) * abs(quantity)
+                    pl_pct = ((current_price - entry_price) / entry_price) * 100
+                    if quantity < 0:  # For short positions
+                        pl_euro = -pl_euro
+                        pl_pct = -pl_pct
+                        
+                    tracked_positions[instrument]['pl_euro'] = round(pl_euro, 2)
+                    tracked_positions[instrument]['profit_pct'] = round(pl_pct, 2)
+                
             return tracked_positions
         except Exception as e:
             print(f"Error getting tracked positions: {e}")
@@ -241,9 +265,8 @@ class OandaTrader:
         pass
 
     def _submit_order(self, order):
-        """Required implementation of abstract method"""
         try:
-            logging.info(f"Submitting order: {order}")
+            logging.info(f"Starting order submission: {order}")
             
             # Create OANDA order data
             order_data = {
@@ -255,44 +278,28 @@ class OandaTrader:
                     "positionFill": "DEFAULT"
                 }
             }
-            
-            logging.info(f"Order data: {order_data}")
+            logging.info(f"OANDA order data: {order_data}")
             
             # Submit order to OANDA
             r = orders.OrderCreate(accountID=self.account_id, data=order_data)
             response = self.api.request(r)
+            logging.info(f"OANDA response: {response}")
             
-            # Detailed logging
-            logging.info(f"Full OANDA response: {response}")
+            if 'orderCreateTransaction' in response:
+                order_id = response['orderCreateTransaction']['id']
+                logging.info(f"Order created successfully with ID: {order_id}")
+                return order_id
             
-            if 'errorMessage' in response:
-                logging.error(f"OANDA error: {response['errorMessage']}")
-                return None
-            
-            if not response or 'orderFillTransaction' not in response:
-                logging.error(f"Invalid order response structure: {response}")
-                return None
-            
-            # Log successful order
-            logging.info(f"Order filled at price: {response['orderFillTransaction']['price']}")
-            
-            # Create and track position
-            position = Position(
-                strategy=order['strategy'],
-                symbol=order['symbol'],
-                quantity=order['quantity'],
-                entry_price=float(response['orderFillTransaction']['price'])
-            )
-            self._filled_positions.append(position)
-            
-            return response['orderCreateTransaction']['id']
+            logging.error(f"Invalid response structure: {response}")
+            return None
+
         except Exception as e:
-            logging.error(f"Error submitting order: {e}", exc_info=True)
+            logging.error(f"Error in submit_order: {e}", exc_info=True)
             return None
 
     def submit_order(self, order):
-        """Public method that calls the private _submit_order"""
-        return self._submit_order(order)
+        """Add order to queue and process immediately"""
+        return self._submit_order(order)  # Remove the queue, just submit directly
 
     def cancel_order(self, order_id):
         # Not implemented for OANDA
