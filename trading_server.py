@@ -74,14 +74,15 @@ def execute_trade():
 @app.route('/close-position/<symbol>', methods=['POST'])
 def close_position(symbol):
     try:
-        positions = broker.get_tracked_positions()
-        if symbol not in positions:
+        # Get current positions before closing
+        initial_positions = broker.get_tracked_positions()
+        if symbol not in initial_positions:
             return jsonify({
                 'status': 'error',
                 'message': 'No position found'
             }), 404
             
-        position = positions[symbol]
+        position = initial_positions[symbol]
         order = {
             'strategy': None,
             'symbol': symbol,
@@ -89,11 +90,31 @@ def close_position(symbol):
             'side': 'sell' if position['quantity'] > 0 else 'buy'
         }
         
+        logger.info(f"Closing position for {symbol}: {order}")
         order_id = broker.submit_order(order)
-        return jsonify({'status': 'success', 'order_id': order_id})
+        
+        # Verify position was actually closed by checking updated positions
+        updated_positions = broker.get_tracked_positions()
+        if symbol not in updated_positions:
+            # Position was successfully closed
+            return jsonify({
+                'status': 'success',
+                'order_id': order_id,
+                'message': 'Position closed successfully'
+            }), 200
+            
+        # Position still exists - closing failed
+        return jsonify({
+            'status': 'error',
+            'message': 'Position closing failed - position still exists'
+        }), 400
+        
     except Exception as e:
-        logger.error(f"Position closing error: {e}", exc_info=True)
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+        logger.error(f"Error closing position: {e}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 @app.route('/trading-status', methods=['GET'])
 def get_trading_status():
