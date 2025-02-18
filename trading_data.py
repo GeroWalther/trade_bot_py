@@ -1,9 +1,17 @@
 class TradingDataStore:
     def __init__(self):
         self.data = {
-            'cash_available': 0,
-            'total_portfolio_value': 0,
-            'daily_return_pct': 0,
+            'account': {
+                'balance': 0,
+                'unrealized_pl': 0,
+                'total_value': 0,
+            },
+            'market_prices': {
+                'EUR_USD': None,
+                'BTC_USD': None,
+                'last_update': None
+            },
+            'trade_history': [],  # List of recent trades
             'positions': {},
             'trading_stats': {
                 'win_rate': 0,
