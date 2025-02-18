@@ -85,13 +85,18 @@ class OandaTrader:
         self._orders = {}  # Add this line for tracking orders
         self._held_trades = {}  # Add this line
         self._price_history = {
-            'EUR_USD': deque(maxlen=100),  # Store last 100 price points
-            'BTC_USD': deque(maxlen=100)
+            'EUR_USD': deque(maxlen=100),
+            'GBP_USD': deque(maxlen=100),
+            'USD_JPY': deque(maxlen=100),
+            'AUD_USD': deque(maxlen=100),
+            'USD_CAD': deque(maxlen=100),
+            'BTC_USD': deque(maxlen=100),
+            'SPX500_USD': deque(maxlen=100),
+            'NAS100_USD': deque(maxlen=100),
+            'XAU_USD': deque(maxlen=100),
+            'BCO_USD': deque(maxlen=100)
         }
-        self._last_prices = {
-            'EUR_USD': None,
-            'BTC_USD': None
-        }
+        self._last_prices = {symbol: None for symbol in self._price_history.keys()}
         
     def set_strategy_name(self, name):
         self._strategy_name = name
@@ -128,14 +133,24 @@ class OandaTrader:
             return None
 
     def is_market_open(self, symbol=None):
-        # Crypto markets are always open
-        if symbol and "BTC" in symbol:
-            return True
-            
-        # Existing forex market hours logic
+        # Different market hours for different instrument types
         current_time = self.get_time()
         current_weekday = current_time.weekday()
         
+        if symbol:
+            if 'BTC' in symbol:  # Crypto markets
+                return True
+            elif 'SPX' in symbol or 'NAS' in symbol:  # US indices
+                if current_weekday >= 5:  # Weekend
+                    return False
+                # Regular trading hours 9:30 AM - 4:00 PM EST
+                return True  # Simplified for demo
+            elif 'XAU' in symbol or 'BCO' in symbol:  # Commodities
+                if current_weekday >= 5:  # Weekend
+                    return False
+                return True  # Simplified for demo
+        
+        # Default forex market hours
         if current_weekday == 4 and current_time.hour >= 17:  # Friday after 5 PM
             return False
         if current_weekday == 5:  # Saturday
@@ -161,41 +176,49 @@ class OandaTrader:
             print(f"Error getting balances: {e}")
             return self._cash, 0, self._cash
             
-    def get_tracked_positions(self, strategy_name=None):
+    def get_tracked_positions(self):
+        """Get all current positions"""
         try:
+            # Get positions directly from OANDA
             r = positions.OpenPositions(accountID=self.account_id)
             response = self.api.request(r)
+            logging.info(f"OANDA positions response: {response}")
             
             tracked_positions = {}
-            for position in response['positions']:
-                instrument = position['instrument']
-                current_price = self.get_last_price(instrument)
+            for position in response.get('positions', []):
+                symbol = position['instrument']
                 
-                quantity = float(position['long']['units']) if 'long' in position else float(position['short']['units'])
-                entry_price = float(position['long']['averagePrice']) if 'long' in position else float(position['short']['averagePrice'])
+                # Get long/short position details
+                long_units = float(position.get('long', {}).get('units', 0))
+                short_units = float(position.get('short', {}).get('units', 0))
                 
-                tracked_positions[instrument] = {
+                # Determine if long or short position
+                quantity = long_units if long_units != 0 else short_units
+                entry_price = float(position.get('long' if long_units != 0 else 'short', {}).get('averagePrice', 0))
+                
+                # Get current price
+                current_price = self.get_last_price(symbol)
+                
+                # Calculate P/L
+                pl_euro = float(position.get('unrealizedPL', 0))
+                pl_pct = ((current_price - entry_price) / entry_price * 100) if current_price else 0
+                if quantity < 0:  # Invert percentage for short positions
+                    pl_pct = -pl_pct
+                
+                tracked_positions[symbol] = {
                     'quantity': quantity,
                     'entry_price': entry_price,
                     'current_price': current_price,
-                    'unrealized_pl': float(position['unrealizedPL']),
-                    'value': quantity * entry_price
+                    'pl_euro': pl_euro,
+                    'profit_pct': pl_pct,
+                    'side': 'LONG' if quantity > 0 else 'SHORT'
                 }
                 
-                # Calculate profit/loss
-                if current_price:
-                    pl_euro = (current_price - entry_price) * abs(quantity)
-                    pl_pct = ((current_price - entry_price) / entry_price) * 100
-                    if quantity < 0:  # For short positions
-                        pl_euro = -pl_euro
-                        pl_pct = -pl_pct
-                        
-                    tracked_positions[instrument]['pl_euro'] = round(pl_euro, 2)
-                    tracked_positions[instrument]['profit_pct'] = round(pl_pct, 2)
-                
+            logging.info(f"Tracked positions: {tracked_positions}")
             return tracked_positions
+            
         except Exception as e:
-            print(f"Error getting tracked positions: {e}")
+            logging.error(f"Error getting tracked positions: {e}", exc_info=True)
             return {}
 
     def get_time(self):
@@ -264,16 +287,47 @@ class OandaTrader:
         # Not implemented for OANDA
         pass
 
-    def _submit_order(self, order):
+    def submit_order(self, order):
+        """Submit order directly to broker"""
         try:
             logging.info(f"Starting order submission: {order}")
+            
+            symbol = order['symbol']
+            quantity = order['quantity']
+            side = order['side']
+            
+            # Verify market is open
+            if not self.is_market_open(symbol):
+                logging.error(f"Market is closed for {symbol}")
+                raise Exception(f"Market is closed for {symbol}")
+            
+            # Get current price to verify it exists
+            current_price = self.get_last_price(symbol)
+            if current_price is None:
+                logging.error(f"Could not get current price for {symbol}")
+                raise Exception(f"Could not get current price for {symbol}")
+            
+            # Convert quantity to string with proper precision
+            if 'XAU' in symbol:
+                units = str(round(quantity, 3))
+            elif 'BTC' in symbol:
+                units = str(round(quantity, 8))
+            elif 'SPX' in symbol or 'NAS' in symbol:
+                units = str(round(quantity, 1))
+            else:  # Forex
+                units = str(int(quantity))
+            
+            # For sell orders, make units negative to open short position
+            if side == 'sell':
+                units = f"-{units}"
+            logging.info(f"Calculated units for order: {units}")
             
             # Create OANDA order data
             order_data = {
                 "order": {
                     "type": "MARKET",
-                    "instrument": order['symbol'],
-                    "units": str(order['quantity']) if order['side'] == 'buy' else str(-order['quantity']),
+                    "instrument": symbol,
+                    "units": units,
                     "timeInForce": "FOK",
                     "positionFill": "DEFAULT"
                 }
@@ -283,23 +337,24 @@ class OandaTrader:
             # Submit order to OANDA
             r = orders.OrderCreate(accountID=self.account_id, data=order_data)
             response = self.api.request(r)
-            logging.info(f"OANDA response: {response}")
+            logging.info(f"OANDA raw response: {response}")
             
             if 'orderCreateTransaction' in response:
                 order_id = response['orderCreateTransaction']['id']
                 logging.info(f"Order created successfully with ID: {order_id}")
                 return order_id
             
-            logging.error(f"Invalid response structure: {response}")
-            return None
+            if 'errorMessage' in response:
+                error_msg = response['errorMessage']
+                logging.error(f"OANDA error: {error_msg}")
+                raise Exception(f"OANDA error: {error_msg}")
+            
+            logging.error(f"Order failed: {response}")
+            raise Exception("Order submission failed")
 
         except Exception as e:
             logging.error(f"Error in submit_order: {e}", exc_info=True)
-            return None
-
-    def submit_order(self, order):
-        """Add order to queue and process immediately"""
-        return self._submit_order(order)  # Remove the queue, just submit directly
+            raise
 
     def cancel_order(self, order_id):
         # Not implemented for OANDA
@@ -357,17 +412,6 @@ class OandaTrader:
                 close_time += timedelta(days=1)
             return (close_time - current_time).total_seconds()
         return float('inf')  # For 24/7 markets like crypto 
-
-    def _process_order_queue(self):
-        """Process any pending orders in the queue"""
-        while not self._orders_queue.empty():
-            order = self._orders_queue.get()
-            self._submit_order(order)
-
-    def submit_order(self, order):
-        """Add order to queue"""
-        self._orders_queue.put(order)
-        self._process_order_queue() 
 
     # Add these required abstract methods
     def _create_stream_object(self):
