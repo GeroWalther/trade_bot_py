@@ -11,6 +11,7 @@ from strategies.ema_trend import EMATrendStrategy
 from strategies.bb_strategy import BBStrategy
 import threading
 import time
+from services.market_intelligence_service import MarketIntelligenceService
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -30,6 +31,9 @@ try:
 except Exception as e:
     logger.error(f"Failed to initialize broker or strategies: {e}", exc_info=True)
     raise
+
+# Initialize the service
+market_intelligence = MarketIntelligenceService()
 
 @app.route('/execute-trade', methods=['POST'])
 def execute_trade():
@@ -526,6 +530,17 @@ def after_request(response):
     response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE')
     return response
+
+@app.route('/api/market-intelligence')
+async def get_market_intelligence():
+    try:
+        analysis = await market_intelligence.get_market_analysis()
+        return jsonify(analysis)
+    except Exception as e:
+        return jsonify({
+            'error': True,
+            'message': str(e)
+        }), 500
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5002, debug=True) 
