@@ -542,5 +542,17 @@ async def get_market_intelligence():
             'message': str(e)
         }), 500
 
+@app.route('/api/economic-indicators')
+def get_economic_indicators():
+    try:
+        indicators = market_intelligence.get_economic_indicators()
+        return jsonify(indicators)
+    except Exception as e:
+        logger.error(f"Error getting economic indicators: {e}")
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 500
+
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5002, debug=True) 
