@@ -28,18 +28,568 @@ class MarketIntelligenceService:
             'indices': ['SPX500_USD', 'NAS100_USD', 'DE30_EUR']
         }
         
-        # Updated economic indicators with real FRED series IDs
-        self.indicators = {
-            'US CPI (YoY)': 'CPIAUCSL',          # Consumer Price Index
-            'US PPI (YoY)': 'PPIACO',            # Producer Price Index
-            'Fed Interest Rate': 'FEDFUNDS',      # Federal Funds Rate
-            'US 10Y Treasury': 'DGS10',          # 10-Year Treasury Rate
-            'ECB Interest Rate': 'ECBDFR',       # ECB Deposit Facility Rate
-            'EU CPI (YoY)': 'CP0000EZ19M086NEST',# EU Harmonized CPI
-            'US Unemployment': 'UNRATE',          # Unemployment Rate
-            'US GDP Growth': 'GDP',              # Gross Domestic Product
-            'Industrial Production': 'INDPRO',    # Industrial Production Index
-            'US Core PCE': 'PCEPILFE'            # Core Personal Consumption Expenditures
+        # Map frontend assets to their specific indicators
+        self.asset_specific_indicators = {
+            # Forex Pairs
+            'EURUSD': {
+                'primary': 'Forex',
+                'additional': [
+                    'ECB Interest Rate',
+                    'EU CPI (YoY)',
+                    'EU GDP Growth',
+                    'EU Unemployment',
+                    'EU Manufacturing PMI'
+                ]
+            },
+            'GBPUSD': {
+                'primary': 'Forex',
+                'additional': [
+                    'BOE Interest Rate',
+                    'UK CPI (YoY)',
+                    'UK GDP Growth',
+                    'UK Manufacturing PMI'
+                ]
+            },
+            'AUDUSD': {
+                'primary': 'Forex',
+                'additional': [
+                    'RBA Interest Rate',
+                    'AU CPI (YoY)',
+                    'AU GDP Growth',
+                    'AU Trade Balance',
+                    'China GDP Growth'  # Important for AUD
+                ]
+            },
+            'USDJPY': {
+                'primary': 'Forex',
+                'additional': [
+                    'BOJ Interest Rate',
+                    'JP CPI (YoY)',
+                    'JP GDP Growth',
+                    'JP Trade Balance'
+                ]
+            },
+            # Commodities
+            'XAUUSD': {
+                'primary': 'Gold',
+                'additional': ['VIX Index', 'Global Economic Policy Uncertainty']
+            },
+            'XAGUSD': {
+                'primary': 'Gold',
+                'additional': [
+                    'Industrial Production',  # Silver has industrial uses
+                    'Global Manufacturing PMI'
+                ]
+            },
+            'WTIUSD': {
+                'primary': 'Oil',
+                'additional': [
+                    'EIA Crude Stocks',
+                    'US Gasoline Demand',
+                    'OPEC Production',
+                    'Global Oil Demand'
+                ]
+            },
+            # Indices
+            'SPX': {
+                'primary': 'Indices',
+                'additional': [
+                    'US Retail Sales',
+                    'US Consumer Confidence',
+                    'US Manufacturing PMI'
+                ]
+            },
+            'NDX': {
+                'primary': 'Indices',
+                'additional': [
+                    'US Tech Sector Growth',
+                    'Semiconductor Index',
+                    'Cloud Computing Index'
+                ]
+            },
+            'DE30': {
+                'primary': 'Indices',
+                'additional': [
+                    'EU Manufacturing PMI',
+                    'German GDP Growth',
+                    'German Industrial Production',
+                    'ECB Interest Rate'
+                ]
+            },
+            'N225': {
+                'primary': 'Indices',
+                'additional': [
+                    'JP Manufacturing PMI',
+                    'BOJ Interest Rate',
+                    'JP Industrial Production'
+                ]
+            }
+        }
+
+        # Expanded indicators dictionary with all indicators
+        self.asset_indicators = {
+            'Economic': {
+                'Fed Interest Rate': {
+                    'series_id': 'FEDFUNDS',
+                    'correlation': 0.92,
+                    'importance': 98,
+                    'description': 'Federal Reserve benchmark rate'
+                },
+                'US CPI (YoY)': {
+                    'series_id': 'CPIAUCSL',
+                    'correlation': 0.85,
+                    'importance': 95,
+                    'description': 'Key inflation indicator'
+                },
+                'US GDP Growth': {
+                    'series_id': 'GDP',
+                    'correlation': 0.82,
+                    'importance': 95,
+                    'description': 'Economic growth indicator'
+                },
+                'US Unemployment': {
+                    'series_id': 'UNRATE',
+                    'correlation': -0.75,
+                    'importance': 90,
+                    'description': 'Employment market health'
+                },
+                'Industrial Production': {
+                    'series_id': 'INDPRO',
+                    'correlation': 0.78,
+                    'importance': 88,
+                    'description': 'Manufacturing sector activity'
+                },
+                'Retail Sales': {
+                    'series_id': 'RSAFS',
+                    'correlation': 0.72,
+                    'importance': 85,
+                    'description': 'Consumer spending indicator'
+                },
+                'Consumer Confidence': {
+                    'series_id': 'UMCSENT',
+                    'correlation': 0.68,
+                    'importance': 85,
+                    'description': 'Consumer sentiment index'
+                },
+                'Housing Starts': {
+                    'series_id': 'HOUST',
+                    'correlation': 0.65,
+                    'importance': 82,
+                    'description': 'Real estate market activity'
+                },
+                'Building Permits': {
+                    'series_id': 'PERMIT',
+                    'correlation': 0.63,
+                    'importance': 80,
+                    'description': 'Future construction indicator'
+                },
+                'US PPI (YoY)': {
+                    'series_id': 'PPIACO',
+                    'correlation': 0.80,
+                    'importance': 92,
+                    'description': 'Producer Price Index - wholesale inflation'
+                },
+                'Houses Sold': {
+                    'series_id': 'HSN1F',
+                    'correlation': 0.65,
+                    'importance': 82,
+                    'description': 'New Single-Family Houses Sold'
+                },
+                'TIPS Spread': {
+                    'series_id': 'T5YIE',
+                    'correlation': 0.75,
+                    'importance': 88,
+                    'description': '5-Year Forward Inflation Expectation Rate'
+                }
+            },
+            'Financial': {
+                'US 10Y Treasury': {
+                    'series_id': 'DGS10',
+                    'correlation': -0.82,
+                    'importance': 95,
+                    'description': 'Benchmark government bond yield'
+                },
+                'M2 Money Supply': {
+                    'series_id': 'M2SL',
+                    'correlation': -0.72,
+                    'importance': 85,
+                    'description': 'Money supply growth'
+                },
+                'Corporate Profits': {
+                    'series_id': 'CP',
+                    'correlation': 0.75,
+                    'importance': 88,
+                    'description': 'Business profitability'
+                },
+                'VIX Index': {
+                    'series_id': 'VIXCLS',
+                    'correlation': -0.80,
+                    'importance': 90,
+                    'description': 'Market volatility indicator'
+                },
+                'Bank Credit': {
+                    'series_id': 'TOTBKCR',
+                    'correlation': 0.65,
+                    'importance': 82,
+                    'description': 'Bank lending activity'
+                }
+            },
+            'International': {
+                'US Trade Balance': {
+                    'series_id': 'BOPGSTB',
+                    'correlation': 0.75,
+                    'importance': 85,
+                    'description': 'Trade deficit/surplus'
+                },
+                'Dollar Index': {
+                    'series_id': 'DTWEXB',
+                    'correlation': -0.85,
+                    'importance': 92,
+                    'description': 'USD strength indicator'
+                },
+                'Global Economic Policy': {
+                    'series_id': 'GEPUCURRENT',
+                    'correlation': 0.75,
+                    'importance': 88,
+                    'description': 'Policy uncertainty index'
+                },
+                'Current Account': {
+                    'series_id': 'BOPCA',
+                    'correlation': 0.70,
+                    'importance': 85,
+                    'description': 'International payments balance'
+                }
+            },
+            'Commodities': {
+                'Oil Production': {
+                    'series_id': 'IPG211111CN',
+                    'correlation': -0.85,
+                    'importance': 90,
+                    'description': 'US crude oil production'
+                },
+                'Natural Gas Storage': {
+                    'series_id': 'NGTS',
+                    'correlation': -0.75,
+                    'importance': 85,
+                    'description': 'Natural gas inventories'
+                },
+                'Industrial Materials': {
+                    'series_id': 'RIMP2',
+                    'correlation': 0.72,
+                    'importance': 82,
+                    'description': 'Raw materials price index'
+                }
+            },
+            'Manufacturing': {
+                'ISM Manufacturing': {
+                    'series_id': 'NAPM',
+                    'correlation': 0.78,
+                    'importance': 88,
+                    'description': 'Manufacturing PMI'
+                },
+                'Capacity Utilization': {
+                    'series_id': 'TCU',
+                    'correlation': 0.72,
+                    'importance': 85,
+                    'description': 'Industrial capacity usage'
+                },
+                'Durable Goods': {
+                    'series_id': 'DGORDER',
+                    'correlation': 0.68,
+                    'importance': 82,
+                    'description': 'Manufacturing orders'
+                },
+                'Factory Orders': {
+                    'series_id': 'AMTMNO',
+                    'correlation': 0.65,
+                    'importance': 80,
+                    'description': 'Manufacturing demand'
+                }
+            },
+            'Gold': {
+                'Real Interest Rate': {
+                    'series_id': 'DFII10',
+                    'correlation': -0.88,
+                    'importance': 95,
+                    'description': 'Real 10-Year Treasury Yield'
+                },
+                'Gold ETF Holdings': {
+                    'series_id': 'GLDTONS',
+                    'correlation': 0.82,
+                    'importance': 90,
+                    'description': 'Total Known ETF Holdings of Gold'
+                },
+                'Central Bank Gold': {
+                    'series_id': 'GOLDRESERVES',
+                    'correlation': 0.75,
+                    'importance': 88,
+                    'description': 'Global Central Bank Gold Reserves'
+                }
+            },
+            'Oil': {
+                'US Oil Inventories': {
+                    'series_id': 'WCESTUS1',
+                    'correlation': -0.82,
+                    'importance': 92,
+                    'description': 'Weekly US Crude Oil Stocks'
+                },
+                'Oil Rig Count': {
+                    'series_id': 'RIGCOUNT',
+                    'correlation': 0.70,
+                    'importance': 85,
+                    'description': 'Baker Hughes US Oil Rig Count'
+                },
+                'OPEC Production': {
+                    'series_id': 'OPECCRUDE',
+                    'correlation': -0.85,
+                    'importance': 90,
+                    'description': 'OPEC Crude Oil Production'
+                },
+                'Global Oil Demand': {
+                    'series_id': 'GLOWOILDEMAND',
+                    'correlation': 0.88,
+                    'importance': 93,
+                    'description': 'Global Oil Consumption'
+                }
+            },
+            'Forex': {
+                'Trade Balance': {
+                    'series_id': 'BOPGSTB',
+                    'correlation': 0.75,
+                    'importance': 88,
+                    'description': 'Trade Balance - Goods and Services'
+                },
+                'Government Debt': {
+                    'series_id': 'GFDEGDQ188S',
+                    'correlation': -0.65,
+                    'importance': 85,
+                    'description': 'Federal Debt to GDP'
+                },
+                'Current Account': {
+                    'series_id': 'BOPCA',
+                    'correlation': 0.72,
+                    'importance': 85,
+                    'description': 'Current Account Balance'
+                }
+            },
+            'Crypto': {
+                'Tech Sector': {
+                    'series_id': 'NASDAQ100',
+                    'correlation': 0.85,
+                    'importance': 90,
+                    'description': 'Technology Sector Performance'
+                },
+                'Risk Sentiment': {
+                    'series_id': 'VIXCLS',
+                    'correlation': -0.75,
+                    'importance': 88,
+                    'description': 'Market Volatility Index'
+                },
+                'Monetary Base': {
+                    'series_id': 'BOGMBASE',
+                    'correlation': 0.70,
+                    'importance': 85,
+                    'description': 'Monetary Base Growth'
+                }
+            },
+            'Market': {
+                'Market Volatility': {
+                    'series_id': 'VIXCLS',
+                    'correlation': -0.80,
+                    'importance': 90,
+                    'description': 'VIX - Market Fear Index'
+                },
+                'Credit Spreads': {
+                    'series_id': 'BAA10Y',
+                    'correlation': -0.75,
+                    'importance': 88,
+                    'description': 'Corporate Bond Spread'
+                },
+                'Margin Debt': {
+                    'series_id': 'BOGZ1FL663067003Q',
+                    'correlation': 0.70,
+                    'importance': 85,
+                    'description': 'NYSE Margin Debt'
+                }
+            },
+            'EU': {
+                'ECB Interest Rate': {
+                    'series_id': 'ECBDFR',  # ECB Deposit Facility Rate
+                    'correlation': 0.88,
+                    'importance': 95,
+                    'description': 'European Central Bank benchmark rate'
+                },
+                'EU CPI (YoY)': {
+                    'series_id': 'CP0000EZ19M086NEST',  # Euro Area HICP
+                    'correlation': 0.82,
+                    'importance': 92,
+                    'description': 'Eurozone inflation rate'
+                },
+                'EU GDP Growth': {
+                    'series_id': 'CLVMNACSCAB1GQEA19',  # Euro Area Real GDP
+                    'correlation': 0.78,
+                    'importance': 90,
+                    'description': 'Eurozone economic growth'
+                },
+                'EU Unemployment': {
+                    'series_id': 'LRHUTTTTEZM156S',  # Euro Area Unemployment Rate
+                    'correlation': -0.72,
+                    'importance': 85,
+                    'description': 'Eurozone unemployment rate'
+                },
+                'EU Manufacturing PMI': {
+                    'series_id': 'MPMUEUP',  # Markit Eurozone Manufacturing PMI
+                    'correlation': 0.75,
+                    'importance': 88,
+                    'description': 'Eurozone manufacturing activity'
+                }
+            },
+            'Japan': {
+                'BOJ Interest Rate': {
+                    'series_id': 'IRSTCI01JPM156N',  # Japan Policy Rate
+                    'correlation': 0.85,
+                    'importance': 92,
+                    'description': 'Bank of Japan policy rate'
+                },
+                'Japan CPI (YoY)': {
+                    'series_id': 'JPNCPIALLMINMEI',  # Japan CPI
+                    'correlation': 0.75,
+                    'importance': 88,
+                    'description': 'Japan inflation rate'
+                },
+                'Japan GDP Growth': {
+                    'series_id': 'JPNRGDPEXP',  # Japan Real GDP
+                    'correlation': 0.72,
+                    'importance': 85,
+                    'description': 'Japan economic growth'
+                },
+                'Japan Industrial Production': {
+                    'series_id': 'JPNPROINDMISMEI',  # Japan Industrial Production
+                    'correlation': 0.70,
+                    'importance': 85,
+                    'description': 'Japan manufacturing output'
+                },
+                'Japan Trade Balance': {
+                    'series_id': 'JPTBALA',  # Japan Trade Balance
+                    'correlation': 0.68,
+                    'importance': 82,
+                    'description': 'Japan trade balance'
+                }
+            },
+            'UK': {
+                'BOE Interest Rate': {
+                    'series_id': 'BOEBR',  # Bank of England Base Rate
+                    'correlation': 0.88,
+                    'importance': 95,
+                    'description': 'Bank of England benchmark rate'
+                },
+                'UK CPI (YoY)': {
+                    'series_id': 'GBRCPIALLMINMEI',  # UK CPI
+                    'correlation': 0.82,
+                    'importance': 90,
+                    'description': 'UK inflation rate'
+                },
+                'UK GDP Growth': {
+                    'series_id': 'GBRGDPEXP',  # UK Real GDP
+                    'correlation': 0.75,
+                    'importance': 88,
+                    'description': 'UK economic growth'
+                },
+                'UK Manufacturing PMI': {
+                    'series_id': 'GBMPMI',  # UK Manufacturing PMI
+                    'correlation': 0.72,
+                    'importance': 85,
+                    'description': 'UK manufacturing activity'
+                }
+            },
+            'China': {
+                'China GDP Growth': {
+                    'series_id': 'CHNGDPEXP',  # China Real GDP
+                    'correlation': 0.85,
+                    'importance': 92,
+                    'description': 'China economic growth'
+                },
+                'China Manufacturing PMI': {
+                    'series_id': 'CHNPMICN',  # China Manufacturing PMI
+                    'correlation': 0.78,
+                    'importance': 88,
+                    'description': 'China manufacturing activity'
+                },
+                'China Trade Balance': {
+                    'series_id': 'CHNTRBAL',  # China Trade Balance
+                    'correlation': 0.75,
+                    'importance': 85,
+                    'description': 'China trade balance'
+                }
+            },
+            'Australia': {
+                'RBA Interest Rate': {
+                    'series_id': 'RBATCTR',  # RBA Target Cash Rate
+                    'correlation': 0.85,
+                    'importance': 92,
+                    'description': 'Reserve Bank of Australia rate'
+                },
+                'Australia CPI (YoY)': {
+                    'series_id': 'AUSCPIALLQINMEI',  # Australia CPI
+                    'correlation': 0.78,
+                    'importance': 88,
+                    'description': 'Australia inflation rate'
+                },
+                'Australia GDP Growth': {
+                    'series_id': 'AUSGDPRPCAPCHPT',  # Australia Real GDP
+                    'correlation': 0.75,
+                    'importance': 85,
+                    'description': 'Australia economic growth'
+                }
+            },
+            'Inflation': {
+                'US CPI (YoY)': {
+                    'series_id': 'CPIAUCNS',  # Updated: Not seasonally adjusted CPI
+                    'correlation': 0.85,
+                    'importance': 95,
+                    'description': 'US Consumer Price Index Year over Year'
+                },
+                'US Core CPI (YoY)': {
+                    'series_id': 'CPILFESL',  # Core CPI (Less Food and Energy)
+                    'correlation': 0.82,
+                    'importance': 93,
+                    'description': 'US Core inflation YoY excluding food and energy'
+                },
+                'US PCE (YoY)': {
+                    'series_id': 'PCEPI',  # Updated: Personal Consumption Expenditures
+                    'correlation': 0.88,
+                    'importance': 96,
+                    'description': 'Fed preferred inflation measure YoY'
+                },
+                'EU HICP (YoY)': {
+                    'series_id': 'EA19CPALTT01GYM',  # Updated: Euro Area HICP
+                    'correlation': 0.82,
+                    'importance': 92,
+                    'description': 'Eurozone Harmonized inflation rate YoY'
+                },
+                'UK CPI (YoY)': {
+                    'series_id': 'GBRCPIALLMINMEI',  # UK CPI
+                    'correlation': 0.80,
+                    'importance': 90,
+                    'description': 'UK inflation rate YoY'
+                }
+            }
+        }
+
+        # Release IDs for FRED API
+        self.release_ids = {
+            'US CPI (YoY)': '10',      # Consumer Price Index
+            'US PPI (YoY)': '13',      # Producer Price Index
+            'Fed Interest Rate': '18',  # Federal Funds Rate
+            'US Unemployment': '8',     # Employment Situation
+            'US GDP Growth': '3',       # Gross Domestic Product
+            'US Core PCE': '21',        # Personal Income and Outlays
+            'Industrial Production': '14', # Industrial Production
+            'Manufacturing PMI': '33',   # ISM Manufacturing
+            'Consumer Confidence': '55', # Consumer Sentiment
+            'Corporate Profits': '112',  # Corporate Profits
+            'Oil Inventories': '139',   # Petroleum Status Report
+            'Real Interest Rate': '82'  # Treasury Real Yield Curve
         }
 
         # Impact levels based on market significance
@@ -66,17 +616,6 @@ class MarketIntelligenceService:
             'data': None,
             'timestamp': None,
             'duration': timedelta(days=1)  # Cache economic data for 1 day
-        }
-
-        # Add release IDs for our indicators
-        self.release_ids = {
-            'US CPI (YoY)': '10', # Consumer Price Index (CPI)
-            'US PPI (YoY)': '13', # Producer Price Index (PPI)
-            'Fed Interest Rate': '18', # Federal Funds Rate (FOMC)
-            'US Unemployment': '8', # Employment Situation
-            'US GDP Growth': '3', # Gross Domestic Product
-            'US Core PCE': '21', # Personal Income and Outlays
-            'Industrial Production': '14' # Industrial Production and Capacity Utilization
         }
 
     async def get_market_analysis(self) -> Dict:
@@ -253,91 +792,21 @@ class MarketIntelligenceService:
             logger.error(f"Error fetching release date for {indicator}: {e}")
             return None
 
-    def get_economic_indicators(self) -> Dict:
-        """Get economic indicators from FRED"""
-        try:
-            current_time = datetime.now()
-            
-            # Check cache
-            if (self.economic_cache['data'] and 
-                self.economic_cache['timestamp'] and 
-                (current_time - self.economic_cache['timestamp'] < self.economic_cache['duration'])):
-                return self.economic_cache['data']
-
-            indicators_data = []
-            for name, series_id in self.indicators.items():
-                try:
-                    data = self._fetch_fred_data(series_id)
-                    if data and 'observations' in data:
-                        obs = data['observations']
-                        
-                        # Get values and dates
-                        current_value = float(obs[0]['value'])
-                        current_date = obs[0]['date']
-                        previous_values = [(float(o['value']), o['date']) for o in obs[1:4]]
-                        
-                        # Format values based on type
-                        if series_id in ['FEDFUNDS', 'DGS10', 'ECBDFR']:
-                            value_format = lambda x: f"{x:.2f}%"
-                        else:
-                            value_format = lambda x: f"{x:.1f}%"
-                        
-                        # Get next release date
-                        next_release = self._get_next_release_date(name)
-                        
-                        indicator_data = {
-                            'name': name,
-                            'current': {
-                                'value': value_format(current_value),
-                                'date': current_date
-                            },
-                            'previous': [
-                                {
-                                    'value': value_format(value),
-                                    'date': date
-                                } for value, date in previous_values
-                            ],
-                            'trend': self._calculate_trend([current_value] + [v for v, _ in previous_values]),
-                            'impact': self._get_impact_level(name),
-                            'nextRelease': next_release
-                        }
-                        
-                        indicators_data.append(indicator_data)
-                        
-                except Exception as e:
-                    logger.error(f"Error processing {name}: {e}")
-                    continue
-
-            result = {
-                'economic_indicators': indicators_data,
-                'timestamp': current_time.isoformat(),
-                'next_update': (current_time + self.economic_cache['duration']).isoformat()
-            }
-
-            # Update cache
-            self.economic_cache.update({
-                'data': result,
-                'timestamp': current_time
-            })
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Error fetching economic indicators: {e}")
-            return {
-                'error': True,
-                'message': str(e)
-            }
-
     def _fetch_fred_data(self, series_id: str) -> Dict:
         """Helper method to fetch data from FRED API"""
         url = 'https://api.stlouisfed.org/fred/series/observations'
+        
+        # Calculate dates to ensure we get recent data
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=365)  # Get last year of data
+        
         params = {
             'series_id': series_id,
             'api_key': self.fred_api_key,
             'file_type': 'json',
             'sort_order': 'desc',
-            'limit': 6,  # Get last 6 observations (more history)
+            'observation_start': start_date.strftime('%Y-%m-%d'),
+            'observation_end': end_date.strftime('%Y-%m-%d'),
             'frequency': 'm'  # Monthly frequency
         }
         
@@ -351,27 +820,74 @@ class MarketIntelligenceService:
             response.raise_for_status()
             data = response.json()
             
-            # Get release date info
-            release_url = 'https://api.stlouisfed.org/fred/release/dates'
-            release_params = {
-                'release_id': self.release_ids.get(series_id, ''),
-                'api_key': self.fred_api_key,
-                'file_type': 'json',
-                'sort_order': 'desc',  # Get most recent first
-                'limit': 1
-            }
-            
-            release_response = requests.get(release_url, release_params)
-            if release_response.status_code == 200:
-                release_data = release_response.json()
-                if release_data.get('release_dates'):
-                    data['last_release'] = release_data['release_dates'][0]['date']
+            if not data.get('observations'):
+                logger.error(f"No data returned for {series_id}")
+                return None
+                
+            # Verify data is recent (not older than 6 months)
+            latest_date = datetime.strptime(data['observations'][0]['date'], '%Y-%m-%d')
+            if (end_date - latest_date).days > 180:
+                logger.warning(f"Data for {series_id} is older than 6 months. Latest date: {latest_date.date()}")
             
             return data
             
         except Exception as e:
             logger.error(f"FRED API Error for {series_id}: {str(e)}")
             return None
+
+    def get_economic_indicators(self, asset_category: str = None, asset_symbol: str = None) -> Dict:
+        """Get all available economic indicators"""
+        try:
+            # Combine all indicators from all categories
+            all_indicators = {}
+            for category_indicators in self.asset_indicators.values():
+                all_indicators.update(category_indicators)
+            
+            # Process indicators
+            indicators_data = []
+            for name, info in all_indicators.items():
+                try:
+                    data = self._fetch_fred_data(info['series_id'])
+                    if not data or 'observations' not in data or not data['observations']:
+                        continue
+
+                    obs = data['observations']
+                    current_value = float(obs[0]['value'])
+                    current_date = obs[0]['date']
+                    previous_values = [(float(o['value']), o['date']) for o in obs[1:4]]
+
+                    # Format values
+                    value_format = lambda x: f"{x:.2f}%" if info['series_id'] in ['FEDFUNDS', 'DGS10', 'ECBDFR'] else f"{x:.1f}%"
+
+                    indicator_data = {
+                        'name': name,
+                        'current': {
+                            'value': value_format(current_value),
+                            'date': current_date
+                        },
+                        'previous': [{'value': value_format(v), 'date': d} for v, d in previous_values],
+                        'trend': self._calculate_trend([current_value] + [v for v, _ in previous_values]),
+                        'correlation': info['correlation'],
+                        'importance': info['importance'],
+                        'description': info['description']
+                    }
+                    indicators_data.append(indicator_data)
+
+                except Exception as e:
+                    logger.error(f"Error processing indicator {name}: {e}")
+                    continue
+
+            return {
+                'economic_indicators': sorted(indicators_data, key=lambda x: x['importance'], reverse=True),
+                'timestamp': datetime.now().isoformat()
+            }
+
+        except Exception as e:
+            logger.error(f"Error in get_economic_indicators: {e}")
+            return {
+                'economic_indicators': [],
+                'message': str(e)
+            }
 
     def _calculate_trend(self, values):
         """Calculate trend from values"""
@@ -384,4 +900,65 @@ class MarketIntelligenceService:
 
     def _get_impact_level(self, indicator):
         """Get impact level for indicator"""
-        return self.impact_levels.get(indicator, "MEDIUM") 
+        return self.impact_levels.get(indicator, "MEDIUM")
+
+    def _calculate_correlation_and_importance(self, series_id: str, asset_type: str) -> tuple:
+        """
+        Calculate correlation with asset price and determine importance
+        Returns (correlation, importance)
+        """
+        try:
+            # Get 5 years of monthly data for the indicator
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=5*365)
+            
+            # Get indicator data
+            indicator_data = self._fetch_fred_data(series_id)
+            if not indicator_data or 'observations' not in indicator_data:
+                return (0, 50)  # Default values if no data
+            
+            # Convert to pandas series
+            indicator_series = pd.Series([
+                float(obs['value']) for obs in indicator_data['observations']
+                if not pd.isna(float(obs['value']))
+            ])
+            
+            # Get corresponding asset price data (implementation depends on your data source)
+            asset_prices = self._get_asset_historical_prices(asset_type, start_date, end_date)
+            
+            if asset_prices is None or len(asset_prices) < 10:
+                return (0, 50)
+            
+            # Calculate correlation
+            correlation = indicator_series.corr(asset_prices)
+            
+            # Calculate importance based on:
+            # 1. Correlation strength (absolute value)
+            # 2. Data reliability (number of observations)
+            # 3. Leading indicator properties
+            # 4. Market consensus (predefined weights)
+            
+            correlation_strength = abs(correlation) * 40  # Up to 40 points
+            data_quality = min(len(indicator_series) / 60 * 20, 20)  # Up to 20 points
+            
+            # Predefined weights for different types of indicators
+            indicator_weights = {
+                'FEDFUNDS': 40,  # Interest rates
+                'CPIAUCSL': 35,  # Inflation
+                'GDP': 30,      # Growth
+                'UNRATE': 25,   # Employment
+                'INDPRO': 20,   # Production
+                'UMCSENT': 15   # Sentiment
+            }
+            
+            base_importance = indicator_weights.get(series_id, 15)
+            
+            # Combine all factors
+            importance = correlation_strength + data_quality + base_importance
+            importance = min(max(importance, 0), 100)  # Ensure between 0-100
+            
+            return (correlation, importance)
+            
+        except Exception as e:
+            logger.error(f"Error calculating correlation for {series_id}: {e}")
+            return (0, 50)  # Default values on error 
