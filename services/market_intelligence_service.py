@@ -1,22 +1,27 @@
 import logging
 import asyncio
-from typing import Dict
+from typing import Dict, List
 from datetime import datetime, timedelta
 from oandapyV20 import API
-import oandapyV20.endpoints.instruments as instruments
+from oandapyV20.endpoints.instruments import InstrumentsCandles
 import pandas as pd
 from config import OANDA_CREDS
 from newsapi import NewsApiClient
 from textblob import TextBlob
 import requests
 import os
+from alpha_vantage.techindicators import TechIndicators
+from alpha_vantage.timeseries import TimeSeries
+from fredapi import Fred
+from services.ai_analysis_service import AIAnalysisService
+import aiohttp
 
 logger = logging.getLogger(__name__)
 
 class MarketIntelligenceService:
     def __init__(self):
         self.api = API(access_token=OANDA_CREDS["ACCESS_TOKEN"])
-        self.news_client = NewsApiClient(api_key='52deeb5fce334ae2b127e2b08efa8335')
+        self.news_client = NewsApiClient(api_key=os.getenv('NEWS_API_KEY'))
         self.fred_api_key = os.getenv('FRED_API_KEY')
         if not self.fred_api_key:
             logger.error("FRED API key not found")
@@ -618,58 +623,143 @@ class MarketIntelligenceService:
             'duration': timedelta(days=1)  # Cache economic data for 1 day
         }
 
-    async def get_market_analysis(self) -> Dict:
-        """Get comprehensive market analysis"""
-        try:
-            current_time = datetime.now()
-            
-            if self.cache and (current_time - self.cache['timestamp'] < self.cache_duration):
-                return self.cache['data']
+        self.ai_analysis = AIAnalysisService(os.getenv('ALPHA_VANTAGE_KEY'))
 
-            # Get technical analysis and news concurrently
-            forex_analysis, news_data = await asyncio.gather(
-                self._analyze_forex(),
-                self._get_market_news()
+        # Add more data sources
+        self.alpha_vantage = TimeSeries(key=os.getenv('ALPHA_VANTAGE_KEY'))
+        self.fred = Fred(api_key=os.getenv('FRED_API_KEY'))
+        
+        # Add probability calculation
+        self.monte_carlo_sims = 1000
+
+    async def get_comprehensive_analysis(self, asset: str, timeframe: str) -> Dict:
+        """Get complete market analysis including probabilities"""
+        try:
+            # Gather all data concurrently
+            market_data, economic_data, news_data, technical_data = await asyncio.gather(
+                self._get_market_data(asset),
+                self._get_economic_indicators(asset),
+                self._get_market_news(asset),
+                self._get_technical_analysis(asset)
+            )
+            
+            # Calculate probabilities using Monte Carlo
+            probability_analysis = self._calculate_probabilities(
+                technical_data, 
+                timeframe
+            )
+            
+            # Get AI analysis
+            ai_analysis = await self.ai_analysis.generate_market_analysis(
+                asset=asset,
+                market_data=market_data,
+                economic_data=economic_data,
+                news_data=news_data,
+                technical_data=technical_data,
+                probability_analysis=probability_analysis
+            )
+            
+            return {
+                'market_data': market_data,
+                'economic_data': economic_data,
+                'news': news_data,
+                'technical_analysis': technical_data,
+                'probability_analysis': probability_analysis,
+                'ai_analysis': ai_analysis
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in comprehensive analysis: {e}", exc_info=True)
+            raise
+
+    async def get_asset_analysis(self, asset: str, timeframe: str) -> Dict:
+        """Get comprehensive asset analysis"""
+        try:
+            logger.info(f"Getting analysis for {asset} with timeframe {timeframe}")
+            
+            # Gather all data concurrently for efficiency
+            market_data, economic_data, news_data = await asyncio.gather(
+                self._get_market_data(asset),
+                self._get_economic_indicators(asset),
+                self._get_market_news(asset)
             )
 
-            analysis = {
-                'forex': forex_analysis,
-                'news': news_data,
-                'timestamp': current_time.isoformat(),
-                'next_update': (current_time + self.cache_duration).isoformat()
+            # Get relevant economic indicators for this asset
+            relevant_indicators = self.asset_specific_indicators.get(asset, {}).get('additional', [])
+            filtered_economic_data = {
+                k: v for k, v in economic_data.items() 
+                if k in relevant_indicators
             }
-            
-            self.cache = {
-                'data': analysis,
-                'timestamp': current_time
-            }
-            
-            return analysis
 
+            return {
+                'market_data': market_data,
+                'economic_data': filtered_economic_data,
+                'news': news_data,
+                'sentiment': {
+                    'score': self._calculate_sentiment(news_data) if news_data else 0.5,
+                    'details': [n.get('sentiment', 0) for n in news_data] if news_data else []
+                },
+                'timestamp': datetime.now().isoformat()
+            }
         except Exception as e:
-            logger.error(f"Error in market analysis: {e}")
-            return self._get_error_response()
+            logger.error(f"Error in asset analysis: {e}", exc_info=True)
+            raise
 
     async def _get_oanda_data(self, symbol: str) -> pd.DataFrame:
         """Get OANDA candle data"""
-        params = {
-            "count": 100,
-            "granularity": "H1"
-        }
-        r = instruments.Candles(instrument=symbol, params=params)
-        response = self.api.request(r)
-        
-        candles = response['candles']
-        df = pd.DataFrame([{
-            'close': float(c['mid']['c']),
-            'open': float(c['mid']['o']),
-            'high': float(c['mid']['h']),
-            'low': float(c['mid']['l']),
-            'volume': int(c['volume']),
-            'time': c['time']
-        } for c in candles])
-        
-        return df
+        try:
+            logger.info(f"Fetching OANDA data for {symbol}")
+            
+            # Create request
+            params = {
+                "count": "100",
+                "granularity": "H1",
+                "price": "M"
+            }
+            
+            request = InstrumentsCandles(
+                instrument=symbol,
+                params=params
+            )
+            
+            try:
+                # Make API request
+                response = self.api.request(request)
+                logger.info(f"OANDA response received for {symbol}")
+                
+                if 'candles' not in response:
+                    logger.error(f"Invalid OANDA response: {response}")
+                    return pd.DataFrame()
+                    
+                candles = response['candles']
+                if not candles:
+                    logger.warning(f"No candles returned for {symbol}")
+                    return pd.DataFrame()
+                
+                # Create DataFrame
+                data = []
+                for candle in candles:
+                    if candle['complete']:  # Only use complete candles
+                        data.append({
+                            'time': pd.to_datetime(candle['time']),
+                            'open': float(candle['mid']['o']),
+                            'high': float(candle['mid']['h']),
+                            'low': float(candle['mid']['l']),
+                            'close': float(candle['mid']['c']),
+                            'volume': float(candle.get('volume', 0))
+                        })
+                
+                df = pd.DataFrame(data)
+                df.set_index('time', inplace=True)
+                return df
+                
+            except Exception as e:
+                logger.error(f"OANDA API request failed: {str(e)}")
+                return pd.DataFrame()
+            
+        except Exception as e:
+            logger.error(f"Error in _get_oanda_data: {str(e)}")
+            return pd.DataFrame()
 
     async def _analyze_forex(self) -> Dict:
         """Analyze forex pairs"""
@@ -704,18 +794,18 @@ class MarketIntelligenceService:
                     'probability_up': 65 if sma_20 > sma_50 and rsi < 70 else 35,
                     'confidence': 80 if abs(sma_20 - sma_50) / sma_50 > 0.002 else 60
                 }
-                
+
             except Exception as e:
                 logger.error(f"Error analyzing {symbol}: {e}")
                 results[symbol] = self._get_error_symbol_response(symbol)
                 
         return results
 
-    async def _get_market_news(self) -> Dict:
+    async def _get_market_news(self, asset: str) -> Dict:
         """Get relevant market news"""
         try:
             articles = self.news_client.get_everything(
-                q='forex OR "currency trading" OR "foreign exchange"',
+                q=f'{asset} OR "{asset} trading" OR "foreign exchange"',
                 language='en',
                 sort_by='relevancy',
                 page_size=10
@@ -962,3 +1052,157 @@ class MarketIntelligenceService:
         except Exception as e:
             logger.error(f"Error calculating correlation for {series_id}: {e}")
             return (0, 50)  # Default values on error 
+
+    def _calculate_sentiment(self, news_data):
+        """Calculate sentiment score from news data"""
+        sentiment_scores = [n['sentiment'] for n in news_data]
+        average_sentiment = sum(sentiment_scores) / len(sentiment_scores)
+        return average_sentiment
+
+    async def _get_market_data(self, asset: str) -> Dict:
+        """Get market data including Alpha Vantage indicators"""
+        try:
+            logger.info(f"Getting market data for {asset}")
+            
+            # Get OANDA data
+            oanda_symbol = asset.replace('USD', '_USD')
+            df = await self._get_oanda_data(oanda_symbol)
+            
+            if df.empty:
+                logger.warning(f"No OANDA data available for {asset}, using default data")
+                return self._get_default_market_data()
+            
+            # Get indicators
+            try:
+                current_price = df['close'].iloc[-1]
+                prev_price = df['close'].iloc[-2]
+                volume = int(df['volume'].iloc[-1]) if 'volume' in df else 0
+                
+                sma20 = df['close'].rolling(window=20).mean().iloc[-1]
+                sma50 = df['close'].rolling(window=50).mean().iloc[-1]
+                rsi = self._calculate_rsi(df['close'])
+                
+                return {
+                    'current_price': current_price,
+                    'change_percent': ((current_price - prev_price) / prev_price) * 100,
+                    'volume': volume,
+                    'indicators': {
+                        'rsi': rsi,
+                        'sma': {
+                            'sma20': sma20,
+                            'sma50': sma50
+                        }
+                    },
+                    'signals': {
+                        'trend': {
+                            'primary': 'BULLISH' if sma20 > sma50 else 'BEARISH',
+                            'strength': 'STRONG' if abs(sma20 - sma50) / sma50 > 0.001 else 'MODERATE'
+                        }
+                    }
+                }
+                
+            except Exception as e:
+                logger.error(f"Error calculating indicators: {str(e)}")
+                return self._get_default_market_data()
+            
+        except Exception as e:
+            logger.error(f"Error in _get_market_data: {str(e)}")
+            return self._get_default_market_data()
+
+    async def _get_economic_indicators(self, asset: str) -> Dict:
+        """Get economic indicators from FRED"""
+        try:
+            # Get relevant series based on asset
+            indicators = {}
+            
+            # Get GDP growth
+            gdp = self.fred.get_series('GDP')
+            gdp_growth = ((gdp.iloc[-1] - gdp.iloc[-2]) / gdp.iloc[-2]) * 100
+            
+            # Get inflation
+            cpi = self.fred.get_series('CPIAUCSL')
+            inflation = ((cpi.iloc[-1] - cpi.iloc[-13]) / cpi.iloc[-13]) * 100  # YoY
+            
+            # Get interest rates
+            interest_rate = self.fred.get_series('FEDFUNDS').iloc[-1]
+            
+            return {
+                'gdp_growth': {
+                    'value': f"{gdp_growth:.1f}%",
+                    'trend': 'up' if gdp_growth > 0 else 'down',
+                    'impact': 'HIGH'
+                },
+                'inflation': {
+                    'value': f"{inflation:.1f}%",
+                    'trend': 'up' if inflation > 2 else 'stable',
+                    'impact': 'HIGH'
+                },
+                'interest_rate': {
+                    'value': f"{interest_rate:.2f}%",
+                    'trend': 'stable',
+                    'impact': 'HIGH'
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting economic indicators: {e}", exc_info=True)
+            return {}
+
+    def _get_asset_historical_prices(self, asset_type: str, start_date: datetime, end_date: datetime) -> pd.Series:
+        """Get historical prices for a specific asset"""
+        # Implementation of _get_asset_historical_prices method
+        pass
+
+    async def _get_tradingview_strategies(self, asset: str) -> List[Dict]:
+        """Get popular TradingView strategies for asset"""
+        try:
+            # You would implement TradingView API call here
+            # For now, returning example strategies
+            return [
+                {
+                    'name': 'BB + RSI Strategy',
+                    'timeframe': '1h',
+                    'signal': 'LONG' if self._should_go_long(asset) else 'SHORT',
+                    'confidence': 75
+                },
+                {
+                    'name': 'MACD Crossover',
+                    'timeframe': '4h',
+                    'signal': 'NEUTRAL',
+                    'confidence': 65
+                }
+            ]
+        except Exception as e:
+            logger.error(f"Error fetching TradingView strategies: {e}")
+            return [] 
+
+    def _get_default_market_data(self) -> Dict:
+        """Return default market data when real data cannot be fetched"""
+        return {
+            'current_price': 0.0,
+            'change_percent': 0.0,
+            'volume': 0,
+            'indicators': {
+                'rsi': 50,
+                'macd': {
+                    'macd': 0,
+                    'signal': 0,
+                    'hist': 0
+                },
+                'bbands': {
+                    'upper': 0,
+                    'middle': 0,
+                    'lower': 0
+                },
+                'sma': {
+                    'sma20': 0,
+                    'sma50': 0
+                }
+            },
+            'signals': {
+                'trend': {
+                    'primary': 'NEUTRAL',
+                    'strength': 'WEAK'
+                }
+            }
+        } 

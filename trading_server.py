@@ -154,7 +154,7 @@ def close_position(symbol):
             'message': str(e)
         }), 500
 
-@app.route('/trading-status', methods=['GET'])
+@app.route('/trading-status')
 def get_trading_status():
     try:
         # Get account info
@@ -178,12 +178,6 @@ def get_trading_status():
             }
         market_prices['last_update'] = datetime.now(pytz.UTC).isoformat()
         
-        # Get market status
-        market_status = {
-            'is_market_open': broker.is_market_open(),
-            'active_symbols': instruments
-        }
-        
         return jsonify({
             'account': {
                 'balance': cash,
@@ -192,9 +186,12 @@ def get_trading_status():
             },
             'positions': positions,
             'market_prices': market_prices,
-            'market_status': market_status,
+            'market_status': {
+                'is_market_open': broker.is_market_open(),
+                'active_symbols': instruments
+            },
             'trading_stats': {
-                'win_rate': 0,
+                'win_rate': 0,  # Add real stats here
                 'winning_trades': 0,
                 'losing_trades': 0
             }
