@@ -5,19 +5,32 @@ from typing import Dict, Any, Optional, List
 import logging
 import oandapyV20
 import oandapyV20.endpoints.instruments as instruments
-from config import OANDA_CREDS, NEWS_API_KEY, ALPHA_VANTAGE_API_KEY
+from config import OANDA_CREDS, ALPHA_VANTAGE_API_KEY
 from datetime import datetime, timedelta
 import yfinance as yf
-from newsapi import NewsApiClient
 from textblob import TextBlob  # For basic sentiment analysis
 from alpha_vantage.timeseries import TimeSeries
 from alpha_vantage.techindicators import TechIndicators
 import asyncio
+import os
+import finnhub
+import requests
+from bs4 import BeautifulSoup
+import aiohttp
 
 logger = logging.getLogger(__name__)
 
 class MarketAnalyzer:
-    def __init__(self, alpha_vantage_key: str):
+    def __init__(self, alpha_vantage_key: str = None):
+        """Initialize the market analyzer"""
+        self.alpha_vantage_key = alpha_vantage_key
+        self.news_api_key = os.getenv('NEWS_API_KEY')  # Add back NewsAPI key
+        
+        if alpha_vantage_key:
+            self._init_alpha_vantage(alpha_vantage_key)
+            
+        self._init_news_service()
+        
         self.data_sources = ['oanda', 'alpha_vantage']
         self.cache_duration = 300  # 5 minutes cache
         self.cached_data = {}
@@ -48,8 +61,6 @@ class MarketAnalyzer:
         
         # Initialize services
         self._init_oanda()
-        self._init_alpha_vantage(alpha_vantage_key)
-        self._init_news_service()
         self._init_ai_service()
 
     def _init_oanda(self):
@@ -276,35 +287,201 @@ class MarketAnalyzer:
         }
 
     async def _fetch_news_data(self, symbol: str) -> List[Dict]:
-        """Fetch news data for the symbol"""
+        """Fetch news data from both Finnhub and NewsAPI"""
         try:
-            # Convert forex pair to searchable terms
-            search_term = symbol.replace('_', '/') if '_' in symbol else symbol
-            
-            news = await asyncio.to_thread(
-                self.news_api.get_everything,
-                q=search_term,
-                language='en',
-                sort_by='relevancy',
-                page_size=10
-            )
-            
-            return [{
-                'title': article['title'],
-                'description': article['description'],
-                'sentiment': self._analyze_text_sentiment(article['title'] + ' ' + article['description']),
-                'published_at': article['publishedAt']
-            } for article in news['articles']]
+            all_articles = []
+            seen_headlines = set()
+
+            # Try Finnhub first
+            try:
+                finnhub_articles = await self._fetch_finnhub_news(symbol)
+                logger.info(f"Got {len(finnhub_articles)} articles from Finnhub for {symbol}")
+                for article in finnhub_articles:
+                    if article['title'] not in seen_headlines:
+                        seen_headlines.add(article['title'])
+                        # Ensure published_at is a timestamp
+                        published_at = float(article['published_at'])
+                        article['formatted_date'] = datetime.fromtimestamp(published_at).strftime('%Y-%m-%d %H:%M')
+                        article['published_at'] = published_at
+                        all_articles.append(article)
+            except Exception as e:
+                logger.error(f"Finnhub fetch error: {e}")
+
+            # Then try NewsAPI
+            try:
+                if hasattr(self, 'news_api'):
+                    newsapi_articles = await self._fetch_newsapi_news(symbol)
+                    logger.info(f"Got {len(newsapi_articles)} articles from NewsAPI for {symbol}")
+                    for article in newsapi_articles:
+                        if article['title'] not in seen_headlines:
+                            seen_headlines.add(article['title'])
+                            # NewsAPI articles already have timestamp as published_at
+                            article['formatted_date'] = datetime.fromtimestamp(article['published_at']).strftime('%Y-%m-%d %H:%M')
+                            all_articles.append(article)
+            except Exception as e:
+                logger.error(f"NewsAPI fetch error: {e}")
+
+            if not all_articles:
+                logger.warning(f"No news found from any source for {symbol}")
+                return []
+
+            # Sort by date (newest first)
+            all_articles.sort(key=lambda x: float(x['published_at']), reverse=True)
+            logger.info(f"Found total of {len(all_articles)} combined articles")
+
+            return all_articles[:30]  # Return 30 newest articles
 
         except Exception as e:
-            logger.error(f"Error fetching news data: {e}")
+            logger.error(f"Error fetching news: {e}", exc_info=True)
             return []
+
+    def _get_broad_search_term(self, symbol: str) -> str:
+        """Get broader search terms for fallback"""
+        broad_terms = {
+            'XAU_USD': 'gold OR precious metals OR bullion',
+            'XAG_USD': 'silver OR precious metals OR bullion',
+            'BCO_USD': 'oil OR crude OR energy market',
+            'SPX500_USD': 'stock market OR S&P OR wall street',
+            'NAS100_USD': 'nasdaq OR tech stocks OR technology sector',
+            'JP225_USD': 'nikkei OR japanese market OR asian stocks',
+            'DE30_EUR': 'dax OR german market OR european stocks'
+        }
+        
+        if symbol in broad_terms:
+            return broad_terms[symbol]
+        elif '_' in symbol:  # Forex pairs
+            base, quote = symbol.split('_')
+            return f"forex OR currency OR {base} OR {quote}"
+        return symbol
+
+    async def _fetch_finnhub_news(self, symbol: str) -> List[Dict]:
+        """Fetch news from Finnhub"""
+        try:
+            # Map symbols to categories and search terms
+            categories = {
+                # Commodities
+                'XAU': 'general',  # Changed from forex to general for better coverage
+                'XAG': 'general',
+                'BCO': 'general',
+                # Indices
+                'SPX500': 'general',
+                'NAS100': 'general',
+                'JP225': 'general',
+                'DE30': 'general'
+            }
             
+            # Get the appropriate category
+            if '_' in symbol:
+                if any(symbol.startswith(prefix) for prefix in categories.keys()):
+                    category = categories[symbol.split('_')[0]]
+                else:
+                    category = 'forex'  # Default for forex pairs
+            else:
+                category = 'general'
+
+            logger.info(f"Fetching news for {symbol} with category: {category}")
+            
+            try:
+                # Get news from both general and forex categories for better coverage
+                general_news = await asyncio.to_thread(
+                    self.finnhub_client.general_news,
+                    'general'
+                )
+                
+                forex_news = await asyncio.to_thread(
+                    self.finnhub_client.general_news,
+                    'forex'
+                )
+                
+                # Combine news from both sources
+                news = general_news + forex_news if forex_news else general_news
+                
+                if not news:
+                    logger.warning(f"No news found for {symbol}")
+                    return []
+                    
+                logger.info(f"Got {len(news)} raw news items from Finnhub")
+                
+                # Enhanced search terms for better matching
+                search_terms = {
+                    # Forex pairs
+                    'EUR': ['euro', 'eur', 'european currency', 'eurozone'],
+                    'USD': ['dollar', 'usd', 'us currency', 'greenback', 'federal reserve', 'fed'],
+                    'GBP': ['pound', 'sterling', 'gbp', 'british currency', 'bank of england', 'boe'],
+                    'JPY': ['yen', 'jpy', 'japanese currency', 'bank of japan', 'boj'],
+                    'CHF': ['franc', 'chf', 'swiss', 'snb', 'swiss national bank'],
+                    'AUD': ['aussie', 'aud', 'australian dollar', 'rba', 'reserve bank of australia'],
+                    'CAD': ['loonie', 'cad', 'canadian dollar', 'bank of canada', 'boc'],
+                    'NZD': ['kiwi', 'nzd', 'new zealand dollar', 'rbnz'],
+                    # Commodities
+                    'XAU': ['gold', 'xau', 'bullion', 'precious metal', 'gold price', 'gold market'],
+                    'XAG': ['silver', 'xag', 'precious metal', 'silver price', 'silver market'],
+                    'BCO': ['brent', 'crude oil', 'oil price', 'petroleum', 'energy market'],
+                    # Indices
+                    'SPX500': ['s&p', 'sp500', 's&p 500', 'spx', 'us stocks', 'wall street'],
+                    'NAS100': ['nasdaq', 'tech stocks', 'nasdaq 100', 'technology sector'],
+                    'JP225': ['nikkei', 'japanese stocks', 'nikkei 225', 'japan market'],
+                    'DE30': ['dax', 'german stocks', 'dax 40', 'german market', 'european stocks']
+                }
+                
+                # Get relevant search terms
+                base_curr = symbol[:3] if '_' in symbol else symbol
+                quote_curr = symbol[4:] if '_' in symbol else None
+                
+                relevant_terms = search_terms.get(base_curr, [base_curr.lower()])
+                if quote_curr:
+                    relevant_terms.extend(search_terms.get(quote_curr, [quote_curr.lower()]))
+                
+                articles = []
+                seen_headlines = set()
+                
+                for article in news:
+                    if not article.get('headline') or not article.get('summary'):
+                        continue
+                        
+                    text = (article['headline'] + ' ' + article['summary']).lower()
+                    
+                    # Check if article is relevant
+                    if not any(term.lower() in text for term in relevant_terms):
+                        continue
+                        
+                    if article['headline'] in seen_headlines:
+                        continue
+                        
+                    seen_headlines.add(article['headline'])
+                    
+                    articles.append({
+                        'title': article['headline'],
+                        'description': article.get('summary', ''),
+                        'sentiment': self._analyze_text_sentiment(
+                            article['headline'] + ' ' + article.get('summary', '')
+                        ),
+                        'published_at': article['datetime'],
+                        'url': article.get('url', ''),
+                        'source': article.get('source', 'Finnhub'),
+                        'category': category
+                    })
+                
+                # Sort by date (newest first)
+                articles.sort(key=lambda x: x['published_at'], reverse=True)
+                
+                logger.info(f"Found {len(articles)} relevant articles for {symbol}")
+                
+                return articles[:30]  # Limit to 30 most recent articles
+                
+            except Exception as api_error:
+                logger.error(f"Finnhub API error: {api_error}")
+                raise
+                
+        except Exception as e:
+            logger.error(f"Error fetching Finnhub news: {e}")
+            return []
+
     def _analyze_text_sentiment(self, text: str) -> float:
         """Analyze text sentiment using TextBlob"""
         try:
             analysis = TextBlob(text)
-            return analysis.sentiment.polarity
+            return analysis.sentiment.polarity  # Returns value between -1 and 1
         except Exception:
             return 0.0
             
@@ -328,8 +505,36 @@ class MarketAnalyzer:
         self.ti = TechIndicators(key=key, output_format='pandas')
         
     def _init_news_service(self):
-        """Initialize news API client"""
-        self.news_api = NewsApiClient(api_key=NEWS_API_KEY)
+        """Initialize news API clients"""
+        try:
+            # Initialize both Finnhub and NewsAPI clients
+            finnhub_key = os.getenv('FINNHUB_API_KEY')
+            if not finnhub_key:
+                raise ValueError("FINNHUB_API_KEY not found in environment")
+            self.finnhub_client = finnhub.Client(api_key=finnhub_key)
+            
+            if self.news_api_key:
+                from newsapi import NewsApiClient
+                self.news_api = NewsApiClient(api_key=self.news_api_key)
+                logger.info("NewsAPI initialized successfully")
+            
+            # Test the connections
+            test_news_finnhub = self.finnhub_client.general_news('general')  # Changed from 'forex' to 'general'
+            if test_news_finnhub is not None:
+                logger.info("Finnhub connection test successful")
+            
+            if hasattr(self, 'news_api'):
+                test_news_api = self.news_api.get_everything(
+                    q='market',  # More general search term for testing
+                    language='en',
+                    page_size=1
+                )
+                if test_news_api:
+                    logger.info("NewsAPI connection test successful")
+            
+        except Exception as e:
+            logger.error(f"News service initialization error: {e}")
+            raise ValueError(f"News service initialization failed: {e}")
 
     def _init_ai_service(self):
         """Initialize AI analysis service"""
@@ -362,4 +567,100 @@ class MarketAnalyzer:
             
         except Exception as e:
             logger.error(f"Error generating explanation: {e}")
-            return "Unable to generate analysis explanation." 
+            return "Unable to generate analysis explanation."
+
+    def _get_search_term_for_symbol(self, symbol: str) -> str:
+        """Get appropriate search term for the symbol"""
+        search_terms = {
+            # Indices
+            'SPX500_USD': '(S&P 500) OR SP500 OR (US stock market)',
+            'NAS100_USD': 'Nasdaq OR (Nasdaq 100) OR (US tech stocks)',
+            'JP225_USD': 'Nikkei OR (Nikkei 225) OR (Japanese stocks)',
+            'DE30_EUR': 'DAX OR (DAX 40) OR (German stocks)',
+            # Commodities with broader terms
+            'XAU_USD': '(gold price) OR (gold market) OR (precious metals) OR (gold trading)',
+            'XAG_USD': '(silver price) OR (silver market) OR (precious metals) OR (silver trading) OR (commodity silver)',
+            'BCO_USD': '(brent crude) OR (oil price) OR (crude oil) OR (oil market)'
+        }
+        
+        # If it's a commodity, add more general market terms
+        if symbol in ['XAU_USD', 'XAG_USD']:
+            base_term = search_terms.get(symbol, '')
+            return f"{base_term} OR (commodity market) OR (metals trading)"
+        
+        return search_terms.get(symbol, symbol.replace('_', '/'))
+
+    async def _fetch_newsapi_news(self, symbol: str) -> List[Dict]:
+        """Fetch news from NewsAPI"""
+        try:
+            search_term = self._get_search_term_for_symbol(symbol)
+            from_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+            
+            # Add more financial news sources
+            domains = (
+                'reuters.com,bloomberg.com,cnbc.com,finance.yahoo.com,marketwatch.com,'
+                'kitco.com,mining.com,bullionvault.com,investing.com,ft.com'
+            )
+            
+            # Try multiple searches for better coverage
+            all_articles = []
+            
+            # First try with specific search
+            news = await asyncio.to_thread(
+                self.news_api.get_everything,
+                q=search_term,
+                language='en',
+                sort_by='publishedAt',
+                from_param=from_date,
+                page_size=30,
+                domains=domains
+            )
+            
+            all_articles.extend(news.get('articles', []))
+            
+            # For commodities, try an additional broader search
+            if symbol in ['XAU_USD', 'XAG_USD']:
+                broad_term = 'precious metals market' if symbol == 'XAG_USD' else 'gold market'
+                more_news = await asyncio.to_thread(
+                    self.news_api.get_everything,
+                    q=broad_term,
+                    language='en',
+                    sort_by='publishedAt',
+                    from_param=from_date,
+                    page_size=15,
+                    domains=domains
+                )
+                all_articles.extend(more_news.get('articles', []))
+            
+            # Process and format articles
+            processed_articles = []
+            seen_headlines = set()
+            
+            for article in all_articles:
+                if not article['title'] or not article['description']:
+                    continue
+                    
+                if article['title'] in seen_headlines:
+                    continue
+                    
+                seen_headlines.add(article['title'])
+                
+                processed_articles.append({
+                    'title': article['title'],
+                    'description': article['description'],
+                    'sentiment': self._analyze_text_sentiment(
+                        article['title'] + ' ' + article['description']
+                    ),
+                    'published_at': article['publishedAt'],
+                    'url': article['url'],
+                    'source': article['source']['name'],
+                    'category': 'general'
+                })
+            
+            # Sort by date and return
+            processed_articles.sort(key=lambda x: x['published_at'], reverse=True)
+            return processed_articles[:30]
+            
+        except Exception as e:
+            logger.error(f"NewsAPI fetch error: {e}")
+            return [] 
