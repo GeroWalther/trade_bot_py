@@ -1,17 +1,13 @@
-from flask import Blueprint, jsonify, request
+from quart import Blueprint, jsonify, request
 from services.market_intelligence_service import MarketIntelligenceService
 import os
-import asyncio
 import logging
 
 # Configure logger
 logger = logging.getLogger(__name__)
 
 market_bp = Blueprint('market_intelligence', __name__)
-market_service = MarketIntelligenceService(
-    alpha_vantage_key=os.getenv('ALPHA_VANTAGE_KEY'),
-    news_api_key=os.getenv('NEWS_API_KEY')
-)
+market_service = MarketIntelligenceService()
 
 @market_bp.route('/api/market-intelligence')
 async def get_market_intelligence():
@@ -25,26 +21,21 @@ async def get_market_intelligence():
         }), 500
 
 @market_bp.route('/api/economic-indicators')
-def get_economic_indicators():
+async def get_economic_indicators():
+    """Get economic indicators from FRED"""
     try:
-        category = request.args.get('category')
-        asset_symbol = request.args.get('symbol')
+        logger.info("Fetching economic indicators from FRED")
+        indicators = await market_service.get_economic_indicators()
         
-        logger.info(f"Received request with category: {category}, symbol: {asset_symbol}")
-        
-        if not category:
-            logger.error("No category provided in request")
+        if not indicators:
             return jsonify({
-                'economic_indicators': [],
-                'message': 'Category parameter is required'
-            }), 200  # Return 200 with empty data instead of error
+                'status': 'error',
+                'message': 'Failed to fetch economic indicators'
+            }), 500
             
-        indicators = market_service.get_economic_indicators(category, asset_symbol)
+        logger.info(f"Successfully retrieved economic indicators: {indicators}")
         return jsonify(indicators)
         
     except Exception as e:
         logger.error(f"Error getting economic indicators: {e}")
-        return jsonify({
-            'economic_indicators': [],
-            'message': str(e)
-        }), 200  # Return 200 with empty data and message 
+        return jsonify({'error': str(e)}), 500 
