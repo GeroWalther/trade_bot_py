@@ -20,6 +20,17 @@ logger = logging.getLogger(__name__)
 
 class MarketIntelligenceService:
     def __init__(self):
+        try:
+            alpha_vantage_key = os.getenv('ALPHA_VANTAGE_API_KEY')
+            if not alpha_vantage_key:
+                raise ValueError("ALPHA_VANTAGE_API_KEY is required")
+            
+            self.ai_analysis = AIAnalysisService(alpha_vantage_key=alpha_vantage_key)
+            logger.info("Market Intelligence Service initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize Market Intelligence Service: {e}")
+            raise
+
         self.api = API(access_token=OANDA_CREDS["ACCESS_TOKEN"])
         self.news_client = NewsApiClient(api_key=os.getenv('NEWS_API_KEY'))
         self.fred_api_key = os.getenv('FRED_API_KEY')
@@ -623,10 +634,8 @@ class MarketIntelligenceService:
             'duration': timedelta(days=1)  # Cache economic data for 1 day
         }
 
-        self.ai_analysis = AIAnalysisService(os.getenv('ALPHA_VANTAGE_KEY'))
-
         # Add more data sources
-        self.alpha_vantage = TimeSeries(key=os.getenv('ALPHA_VANTAGE_KEY'))
+        self.alpha_vantage = TimeSeries(key=os.getenv('ALPHA_VANTAGE_API_KEY'))
         self.fred = Fred(api_key=os.getenv('FRED_API_KEY'))
         
         # Add probability calculation

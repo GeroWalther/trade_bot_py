@@ -1,4 +1,4 @@
-from quart import Blueprint, jsonify, request
+from quart import Blueprint, jsonify, request, current_app
 from services.market_intelligence_service import MarketIntelligenceService
 from services.ai_analysis_service import AIAnalysisService
 from services.trading_strategy_service import TradingStrategyService
@@ -21,50 +21,40 @@ async def analyze_asset():
         data = await request.get_json()
         logger.info(f"Received analysis request: {data}")
         
-        asset = data.get('asset')
+        symbol = data.get('asset')
         timeframe = data.get('timeframe', 'SWING')
         risk_level = data.get('risk_level', 'MEDIUM')
-        account_size = data.get('account_size', 10000)
-
-        # Get market data - pass the timeframe parameter
-        market_data = await market_intelligence.get_asset_analysis(
-            asset=asset,
-            timeframe=timeframe  # Add this parameter
+        
+        # Get market data and analysis
+        analysis_result = await market_intelligence.analyze_market(
+            symbol=symbol,
+            timeframe=timeframe,
+            risk_level=risk_level
         )
         
-        # Get AI analysis
-        ai_analysis_result = await ai_analysis.generate_market_analysis(
-            asset=asset,
-            market_data=market_data['market_data'],
-            economic_data=market_data['economic_data'],
-            news_data=market_data['news'],
-            sentiment_score=market_data['sentiment']['score']
-        )
-
-        return jsonify({
-            'status': 'success',
-            'data': {
-                'analysis': ai_analysis_result,
-                'macro': {
-                    'aiAnalysis': {
-                        'summary': ai_analysis_result['summary'],
-                        'keyFactors': ai_analysis_result['key_factors'],
-                        'recommendedStrategy': ai_analysis_result['trading_strategy']
-                    }
-                },
-                'news': market_data['news']
-            }
-        })
+        return jsonify(analysis_result)
 
     except Exception as e:
         logger.error(f"Error in analyze_asset: {e}", exc_info=True)
-        # Return more detailed error message
-        return jsonify({
-            'status': 'error',
-            'message': str(e),
-            'details': {
-                'asset': asset,
-                'timeframe': timeframe,
-                'error_type': type(e).__name__
-            }
-        }), 500 
+        return jsonify(market_intelligence._get_default_analysis())
+
+@trading_bp.route('/health')
+async def health_check():
+    return jsonify({'status': 'healthy'})
+
+@trading_bp.route('/trading-status')
+async def get_trading_status():
+    try:
+        trading_state = current_app.trading_state
+        return {
+            'status': 'OK',
+            'isTrading': trading_state.is_trading,
+            'lastUpdate': trading_state.last_update.isoformat() if trading_state.last_update else None,
+            'errors': trading_state.errors
+        }
+    except Exception as e:
+        logger.error(f"Error getting trading status: {e}")
+        return {
+            'status': 'ERROR',
+            'message': str(e)
+        }, 500 

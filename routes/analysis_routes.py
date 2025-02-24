@@ -1,77 +1,88 @@
-from quart import Blueprint, jsonify, request
-from services.market_intelligence_service import MarketIntelligenceService
-from services.ai_analysis_service import AIAnalysisService
-from config import OANDA_CREDS
+from quart import Blueprint, jsonify, request, current_app
+from services.market_analyzer import MarketAnalyzer
+from services.ai_analysis_service_new import AIAnalysisService
 import logging
-import os
+import traceback
 
 logger = logging.getLogger(__name__)
 analysis_bp = Blueprint('analysis', __name__, url_prefix='/api')
 
-# Initialize services
-market_intelligence = MarketIntelligenceService()
-ai_analysis = AIAnalysisService(os.getenv('ALPHA_VANTAGE_KEY'))
-
 @analysis_bp.route('/analyze-asset', methods=['POST'])
 async def analyze_asset():
     try:
+        # Initialize MarketAnalyzer with the API key from app config
+        market_analyzer = MarketAnalyzer(
+            alpha_vantage_key=current_app.market_data.alpha_vantage_key
+        )
+        
         data = await request.get_json()
-        logger.info(f"Received analysis request: {data}")
-        
         asset = data.get('asset')
-        timeframe = data.get('timeframe', 'SWING')
+        timeframe = data.get('timeframe', 'MEDIUM_TERM')
+        risk_level = data.get('risk_level', 'MEDIUM')
         
-        if not asset:
-            return jsonify({
-                'status': 'error',
-                'message': 'Asset symbol is required'
-            }), 400
+        analysis = await market_analyzer.analyze_market(
+            symbol=asset,
+            timeframe=timeframe,
+            risk_level=risk_level
+        )
         
-        logger.info(f"Starting analysis for {asset} with timeframe {timeframe}")
-        
-        try:
-            market_data = await market_intelligence.get_asset_analysis(
-                asset=asset,
-                timeframe=timeframe
-            )
-            
-            logger.info(f"Market data received for {asset}")
-            
-            ai_analysis_result = await ai_analysis.generate_market_analysis(
-                asset=asset,
-                market_data=market_data['market_data'],
-                economic_data=market_data['economic_data'],
-                news_data=market_data['news'],
-                sentiment_score=market_data['sentiment']['score']
-            )
-            
-            logger.info(f"AI analysis completed for {asset}")
-            
-            return jsonify({
-                'status': 'success',
-                'data': {
-                    'analysis': ai_analysis_result,
-                    'macro': {
-                        'aiAnalysis': {
-                            'summary': ai_analysis_result['summary'],
-                            'keyFactors': ai_analysis_result['key_factors'],
-                            'recommendedStrategy': ai_analysis_result['trading_strategy']
-                        }
-                    },
-                    'news': market_data['news']
-                }
-            })
-            
-        except Exception as e:
-            logger.error(f"Error processing analysis: {e}", exc_info=True)
-            return jsonify({
-                'status': 'error',
-                'message': str(e)
-            }), 500
-            
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'analysis': analysis
+            }
+        })
     except Exception as e:
-        logger.error(f"Error parsing request: {e}", exc_info=True)
+        logger.error(f"Error processing analysis: {e}")
         return jsonify({
             'status': 'error',
-            'message': 'Invalid request format'
-        }), 400 
+            'message': str(e)
+        }), 500
+
+@analysis_bp.route('/test-connection', methods=['GET'])
+async def test_connection():
+    try:
+        market_analyzer = MarketAnalyzer(
+            alpha_vantage_key=current_app.market_data.alpha_vantage_key
+        )
+        
+        from oandapyV20.endpoints.accounts import AccountSummary
+        
+        r = AccountSummary(current_app.config['OANDA_CREDS']['ACCOUNT_ID'])
+        market_analyzer.client.request(r)
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'OANDA connection successful',
+            'account_info': r.response
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
+
+@analysis_bp.route('/test-indicators/<symbol>', methods=['GET'])
+async def test_indicators(symbol):
+    try:
+        # Use the app's initialized service instead of creating a new one
+        ai_service = current_app.ai_analysis
+        if not ai_service:
+            return jsonify({
+                'status': 'error',
+                'message': 'AI Analysis service not initialized'
+            }), 500
+        
+        # Get technical analysis
+        result = await ai_service.get_technical_analysis(symbol)
+        logger.info(f"Technical analysis result: {result}")
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"Error in test indicators: {e}", exc_info=True)  # Add full traceback
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500 
