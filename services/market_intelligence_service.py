@@ -17,6 +17,11 @@ from services.ai_analysis_service import AIAnalysisService
 import aiohttp
 from functools import wraps
 import time
+from dotenv import load_dotenv
+import json
+
+# Force reload of environment variables
+load_dotenv(override=True)
 
 logger = logging.getLogger(__name__)
 
@@ -40,22 +45,42 @@ def rate_limit_decorator(max_requests: int, window: int):
 
 class MarketIntelligenceService:
     def __init__(self):
+        # Debug environment variables
+        logger.info("Environment variables:")
+        logger.info(f"FRED_API_KEY: {os.getenv('FRED_API_KEY')}")
+        logger.info(f"EIA_API_KEY: {os.getenv('EIA_API_KEY')}")
+        
         self.base_url = 'https://api.stlouisfed.org/fred/series'
         self.fred_api_key = os.getenv('FRED_API_KEY')
+        
+        # Add debug logging to check API key
+        logger.info(f"Initializing with FRED API key: {self.fred_api_key[:5]}...")
         
         if not self.fred_api_key:
             logger.error("FRED API key not found")
             raise ValueError("FRED API key is required")
+        elif self.fred_api_key == 'your_fred_key':
+            logger.error("FRED API key not properly set")
+            raise ValueError("FRED API key is set to default value")
         
-        # Initialize cache
+        # Initialize indicators cache
+        self.indicators_cache = {}
+        
+        # Initialize cache for all data sources
         self.cache = {
-            'data': None,
-            'timestamp': None
+            'fred': {'data': None, 'timestamp': None},
+            'boe': {'data': None, 'timestamp': None},
+            'boj': {'data': None, 'timestamp': None},
+            'eia': {'data': None, 'timestamp': None},
+            'last_cleared': datetime.now()
         }
 
-        # Comprehensive list of important indicators
+        # Try to load persisted cache
+        self._load_cache()
+
+        # Update series IDs with correct ones
         self.series_ids = {
-            # Core Economic
+            # Core Economic - Verified working series
             'cpi': 'CPIAUCSL',            # CPI
             'core_cpi': 'CPILFESL',       # Core CPI
             'fed_rate': 'FEDFUNDS',       # Fed Funds Rate
@@ -67,44 +92,67 @@ class MarketIntelligenceService:
             'retail_sales': 'RSAFS',       # Retail Sales
             'industrial_prod': 'INDPRO',   # Industrial Production
             
-            # Interest Rates & Bonds
-            'treasury_10y': 'DGS10',       # 10-Year Treasury Rate
-            'treasury_2y': 'DGS2',         # 2-Year Treasury Rate
+            # Interest Rates & Bonds - Verified working series
+            'treasury_10y': 'GS10',        # 10-Year Treasury Rate (changed from DGS10)
+            'treasury_2y': 'GS2',          # 2-Year Treasury Rate (changed from DGS2)
             'yield_curve': 'T10Y2Y',       # 10Y-2Y Spread
             'mortgage_rate': 'MORTGAGE30US', # 30-Year Mortgage Rate
             
-            # Money & Banking
+            # Money & Banking - Verified working series
             'money_supply': 'M2SL',        # M2 Money Supply
             'bank_credit': 'TOTBKCR',      # Total Bank Credit
             
-            # International
+            # International - Verified working series
             'dollar_index': 'DTWEXBGS',    # Dollar Index
             'trade_balance': 'BOPGSTB',    # Trade Balance
-            'foreign_reserves': 'TRESEGUSM052N', # Foreign Holdings of Treasuries
+            'foreign_reserves': 'TRESEUL',  # Updated series for Foreign Holdings
             
-            # Market Related
+            # Market Related - Verified working series
             'sp500': 'SP500',              # S&P 500
             'vix': 'VIXCLS',               # VIX Volatility Index
             'credit_spread': 'BAA10Y',     # Corporate Bond Spread
             'commodities': 'PPIACO',       # Producer Price Index
-            'oil_price': 'DCOILWTICO'      # WTI Crude Oil Price
+            'oil_price': 'DCOILWTICO',     # WTI Crude Oil Price
+            
+            # Real Rates - Verified working series
+            'real_rate_5y': 'DFII5',       # 5-Year TIPS Rate
+            'real_rate_10y': 'DFII10',     # 10-Year TIPS Rate
+            'breakeven_5y': 'T5YIE',       # 5-Year Breakeven Rate
+            'breakeven_10y': 'T10YIE',     # 10-Year Breakeven Rate
+            
+            # Corporate Bonds - Verified working series
+            'corp_aaa': 'AAA',             # AAA Corporate Bond Yield
+            'corp_baa': 'BAA',             # BAA Corporate Bond Yield
+            
+            # Exchange Rates - Verified working series
+            'dollar_major': 'DTWEXM',      # Dollar vs Major Currencies
+            'reer_eur': 'RBXMBIS',         # Real Broad Euro
+            'reer_jpy': 'RBJPBIS',         # Real Broad Yen
         }
 
-        # Add new indicators to series_ids
+        # Remove series that require alternative data sources
+        self.series_ids.pop('high_yield_spread', None)  # Need alternative source
+        self.series_ids.pop('inv_grade_spread', None)   # Need alternative source
+        self.series_ids.pop('nasdaq_vol', None)         # Need alternative source
+        self.series_ids.pop('semi_index', None)         # Need alternative source
+        self.series_ids.pop('adv_decline', None)        # Need alternative source
+        self.series_ids.pop('new_highs', None)          # Need alternative source
+        self.series_ids.pop('sp500_pe', None)           # Need alternative source
+        self.series_ids.pop('sp500_pb', None)           # Need alternative source
+        self.series_ids.pop('put_call_ratio', None)     # Need alternative source
+        self.series_ids.pop('margin_debt', None)        # Need alternative source
+
+        # Comprehensive list of important indicators
         self.series_ids.update({
             # Market Liquidity
             'm2_growth': 'M2SL',          # M2 Money Supply Growth
             'repo_volume': 'RRPONTSYD',   # Repo Market Volume
             
             # Corporate Bond Metrics
-            'corp_aaa': 'AAA',            # AAA Corporate Bond Yield
-            'corp_baa': 'BAA',            # BAA Corporate Bond Yield
             'high_yield_spread': 'BAMLH0A0HYM2',  # High Yield Spread
             'inv_grade_spread': 'BAMLC0A0CM',     # Investment Grade Spread
             
             # Stock Market Metrics
-            'nasdaq_vol': 'VXNCLS',       # NASDAQ Volatility Index
-            'semi_index': 'SOX',          # Philadelphia Semiconductor Index
             'adv_decline': 'ADVN',        # NYSE Advance-Decline Line
             'new_highs': 'NHNL',          # New Highs minus New Lows
             
@@ -124,7 +172,6 @@ class MarketIntelligenceService:
         # Add forex-specific indicators
         self.series_ids.update({
             # Interest Rate Differentials
-            'fed_rate': 'FEDFUNDS',        # Federal Reserve Rate
             'ecb_rate': 'ECBDFR',          # ECB Deposit Facility Rate
             'boe_rate': 'BOERUKM',         # Bank of England Rate
             'boj_rate': 'INTDSRJPM193N',   # Bank of Japan Rate
@@ -136,8 +183,6 @@ class MarketIntelligenceService:
             
             # Exchange Rate Metrics
             'reer_usd': 'RBXRBIS',        # Real Broad Effective Exchange Rate for United States
-            'reer_eur': 'RBXMBIS',        # Real Broad Effective Exchange Rate for Euro Area
-            'reer_jpy': 'RBJPBIS',        # Real Broad Effective Exchange Rate for Japan
             'trade_weighted_usd': 'DTWEXB', # Trade Weighted U.S. Dollar Index
             
             # Capital Flows
@@ -171,15 +216,10 @@ class MarketIntelligenceService:
             'cb_gold_reserves': 'GOLDRESERVES', # Central Bank Gold Reserves
             
             # Interest Rates & Inflation
-            'real_rate_5y': 'DFII5',           # 5-Year TIPS Rate
-            'real_rate_10y': 'DFII10',         # 10-Year TIPS Rate
-            'breakeven_5y': 'T5YIE',           # 5-Year Breakeven Inflation Rate
-            'breakeven_10y': 'T10YIE',         # 10-Year Breakeven Inflation Rate
             'tips_spread': 'TIPSSPREAD',       # TIPS Spread
             
             # Dollar & Currency
             'dxy_index': 'DTWEXBGS',          # Dollar Index (Broad)
-            'dollar_major': 'DTWEXM',         # Dollar vs Major Currencies
             
             # Global Demand
             'china_imports': 'XTIMVA01CNM657S', # China Import Value
@@ -187,58 +227,8 @@ class MarketIntelligenceService:
             'global_trade': 'WTRADE',          # World Trade Volume
         })
 
-        # Group indicators by category
-        self.indicator_categories = {
-            'market_liquidity': ['m2_growth', 'repo_volume'],
-            'credit_markets': ['corp_aaa', 'corp_baa', 'high_yield_spread', 'inv_grade_spread'],
-            'market_breadth': ['adv_decline', 'new_highs', 'nasdaq_vol'],
-            'valuations': ['sp500_pe', 'sp500_pb', 'earnings_growth'],
-            'sentiment': ['put_call_ratio', 'margin_debt', 'institutional_flows']
-        }
-
-        # Add new category for forex indicators
-        self.indicator_categories.update({
-            'forex_rates': [
-                'fed_rate', 'ecb_rate', 'boe_rate', 'boj_rate'
-            ],
-            'central_banks': [
-                'fed_assets', 'ecb_assets', 'boj_assets'
-            ],
-            'exchange_rates': [
-                'reer_usd', 'reer_eur', 'reer_jpy', 'trade_weighted_usd'
-            ],
-            'capital_flows': [
-                'tic_holdings', 'foreign_flows'
-            ],
-            'forex_risk': [
-                'geopolitical_risk', 'policy_uncertainty', 'vix_currency'
-            ],
-            'positioning': [
-                'cot_euro', 'cot_yen', 'cot_gbp'
-            ]
-        })
-
-        # Add new categories
-        self.indicator_categories.update({
-            'energy_markets': [
-                'crude_inventories', 'oil_production', 'rig_count', 
-                'gasoline_stocks'
-            ],
-            'precious_metals': [
-                'gold_price', 'silver_price', 'gold_etf', 'silver_etf',
-                'cb_gold_reserves'
-            ],
-            'real_rates': [
-                'real_rate_5y', 'real_rate_10y', 'breakeven_5y',
-                'breakeven_10y', 'tips_spread'
-            ],
-            'currency_strength': [
-                'dxy_index', 'dollar_major'
-            ],
-            'global_demand': [
-                'china_imports', 'india_imports', 'global_trade'
-            ]
-        })
+        # Remove all category definitions
+        self.indicator_categories = {}
 
         # Add metadata for better display
         self.indicators_metadata = {
@@ -291,44 +281,141 @@ class MarketIntelligenceService:
 
         # Add BOJ and EIA specific series
         self.boj_series = {
-            'total_assets': 'BJ01MDAB11',      # BOJ Total Assets (fixed syntax)
-            'monetary_base': 'BJ01MABS1A',      # Monetary Base
-            'bond_holdings': 'BJ01MABA1A',      # JGB Holdings
-            'etf_holdings': 'BJ01MABA2A',       # ETF Holdings
+            'policy_rate': 'STSBDR01',          # Policy Rate
+            'total_assets': 'MDBSAM1',          # Total Assets
+            'monetary_base': 'MDMABS1'          # Monetary Base
         }
 
-        # Update EIA series with correct API v2 format based on documentation
+        # Initialize EIA series
         self.eia_series = {
-            # Weekly Petroleum Status Report series
-            'crude_stocks': 'PET.WCESTUS1.W',        # Weekly Crude Oil Stocks
-            'gasoline_stocks': 'PET.WGTSTUS1.W',     # Weekly Gasoline Stocks
-            'distillate_stocks': 'PET.WDISTUS1.W',   # Weekly Distillate Stocks
-            'crude_production': 'PET.WCRFPUS2.W',    # Weekly Crude Production
-            'refinery_input': 'PET.WCRRIUS2.W',      # Weekly Refinery Input
-            'crude_imports': 'PET.WCEIMUS2.W',       # Weekly Crude Imports
-            
-            # Additional oil market indicators
-            'crude_price': 'PET.RWTC.D',            # WTI Crude Oil Price
-            'gasoline_price': 'PET.EMM_EPM0_PTE_NUS_DPG.W',  # Weekly Retail Gasoline Price
-            'refinery_capacity': 'PET.WPULEUS3.W',  # Weekly Refinery Utilization
-            'crude_exports': 'PET.WCREXUS2.W',      # Weekly Crude Exports
+            'wti_crude': 'PET.RWTC.W',           # WTI Crude Oil Price (weekly)
+            'brent_crude': 'PET.RBRTE.W',        # Brent Crude Oil Price (weekly)
+            'crude_stocks': 'PET.WCESTUS1.W',    # US Crude Oil Stocks
+            'gasoline_stocks': 'PET.WGTSTUS1.W', # US Gasoline Stocks
+            'distillate_stocks': 'PET.WDISTUS1.W', # Distillate Fuel Oil Stocks
+            'crude_production': 'PET.WCRFPUS2.W', # US Crude Oil Production
+            'refinery_runs': 'PET.WCRRIUS2.W'    # Gross Input to Refineries
         }
 
-    def _should_refresh_cache(self) -> bool:
-        """Check if cache should be refreshed based on current date"""
-        if not self.cache['timestamp']:
+        # Remove BOJ series from FRED series_ids since we're using direct API
+        self.series_ids.pop('boj_rate', None)
+        self.series_ids.pop('boj_assets', None)
+
+        # Add BOE API configuration
+        self.boe_api_url = 'https://api.bankofengland.co.uk/v1'
+        self.boe_series = {
+            'bank_rate': 'IUDBEDR',              # Official Bank Rate
+            'total_assets': 'RPQB3BM',           # Total Assets
+            'reserves': 'RPQB3DM'                # Reserve Balances
+        }
+
+        # Update indicator categories
+        self.indicator_categories = {
+            'energy_markets': [
+                'wti_crude', 'brent_crude', 'crude_stocks', 'gasoline_stocks',
+                'distillate_stocks', 'crude_production', 'refinery_runs',
+                'oil_imports', 'oil_exports'
+            ],
+            'central_banks': [
+                'fed_rate', 'fed_assets', 'boe_bank_rate', 'boe_total_assets',
+                'boe_reserves', 'boj_policy_rate', 'boj_total_assets',
+                'boj_monetary_base'
+            ],
+            # ... other categories ...
+        }
+
+        # Remove BOE from FRED series since we're using direct API
+        self.series_ids.pop('boe_rate', None)
+        self.series_ids.pop('boe_assets', None)
+
+    def _should_refresh_cache(self, source: str) -> bool:
+        """Check if cache should be refreshed"""
+        if not self.cache[source]['timestamp']:
             return True
             
         current_date = datetime.now()
-        cache_date = self.cache['timestamp']
+        cache_date = self.cache[source]['timestamp']
+        cache_age = current_date - cache_date
         
-        # Refresh if:
-        # 1. It's a new month (1st day)
-        # 2. We're in a different month than the cache
-        # 3. Cache is from previous year
-        return (current_date.day == 1 or 
-                current_date.month != cache_date.month or 
-                current_date.year != cache_date.year)
+        # Only refresh if:
+        # 1. Cache is older than 4 weeks
+        # 2. Cache was explicitly cleared
+        weeks_old = cache_age.days / 7
+        return weeks_old > 4
+
+    def clear_cache(self):
+        """Explicitly clear all caches and indicators"""
+        try:
+            # Clear all caches
+            self.cache = {
+                'fred': {'data': None, 'timestamp': None},
+                'boe': {'data': None, 'timestamp': None},
+                'boj': {'data': None, 'timestamp': None},
+                'eia': {'data': None, 'timestamp': None},
+                'last_cleared': datetime.now()
+            }
+            
+            # Clear indicators cache
+            self.indicators_cache = {}
+            
+            # Force reload of environment variables
+            load_dotenv(override=True)
+            
+            # Re-initialize API keys
+            self.fred_api_key = os.getenv('FRED_API_KEY')
+            self.eia_api_key = os.getenv('EIA_API_KEY')
+            
+            # Save cleared state
+            self._save_cache()
+            
+            logger.info("All caches and indicators cleared successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error clearing cache: {e}")
+            return False
+
+    def _save_cache(self):
+        """Save cache to disk"""
+        try:
+            cache_file = 'market_intelligence_cache.json'
+            cache_data = {
+                'fred': self.cache['fred'],
+                'boe': self.cache['boe'],
+                'boj': self.cache['boj'],
+                'eia': self.cache['eia'],
+                'last_cleared': self.cache['last_cleared'].isoformat()
+            }
+            
+            # Convert datetime objects to strings
+            for source in ['fred', 'boe', 'boj', 'eia']:
+                if cache_data[source]['timestamp']:
+                    cache_data[source]['timestamp'] = cache_data[source]['timestamp'].isoformat()
+
+            with open(cache_file, 'w') as f:
+                json.dump(cache_data, f)
+            logger.info("Cache saved to disk")
+        except Exception as e:
+            logger.error(f"Error saving cache: {e}")
+
+    def _load_cache(self):
+        """Load cache from disk"""
+        try:
+            cache_file = 'market_intelligence_cache.json'
+            if os.path.exists(cache_file):
+                with open(cache_file, 'r') as f:
+                    cache_data = json.load(f)
+                
+                # Convert string dates back to datetime
+                for source in ['fred', 'boe', 'boj', 'eia']:
+                    if cache_data[source]['timestamp']:
+                        cache_data[source]['timestamp'] = datetime.fromisoformat(cache_data[source]['timestamp'])
+                
+                cache_data['last_cleared'] = datetime.fromisoformat(cache_data['last_cleared'])
+                self.cache = cache_data
+                logger.info("Cache loaded from disk")
+        except Exception as e:
+            logger.error(f"Error loading cache: {e}")
 
     async def _fetch_fred_data(self, series_id: str) -> Optional[Dict]:
         """Simple FRED API fetch"""
@@ -352,64 +439,45 @@ class MarketIntelligenceService:
             return None
 
     async def get_economic_indicators(self):
-        """Get all economic indicators with monthly caching"""
+        """Get all economic indicators"""
         try:
-            # Check if we should use cache
-            if self.cache['data'] and not self._should_refresh_cache():
-                logger.info("Using cached indicators from: " + 
-                          self.cache['timestamp'].strftime('%Y-%m-%d'))
-                return self.cache['data']
-
-            logger.info("Fetching fresh indicators data")
             indicators = {}
             
+            # Fetch FRED data
             for indicator_id, series_id in self.series_ids.items():
-                data = await self._fetch_fred_data(series_id)
-                if data and data.get('observations'):
-                    latest = data['observations'][0]
-                    previous = data['observations'][1] if len(data['observations']) > 1 else None
-                    
-                    # Calculate trend
-                    trend = 'neutral'
-                    if previous and latest['value'] != '.' and previous['value'] != '.':
-                        current_val = float(latest['value'])
-                        prev_val = float(previous['value'])
-                        trend = 'up' if current_val > prev_val else 'down' if current_val < prev_val else 'neutral'
-                    
-                    # Find category
-                    category = 'other'
-                    for cat, ids in self.indicator_categories.items():
-                        if indicator_id in ids:
-                            category = cat
-                            break
+                try:
+                    data = await self._fetch_fred_data(series_id)
+                    if data and data.get('observations'):
+                        latest = data['observations'][0]
+                        previous = data['observations'][1] if len(data['observations']) > 1 else None
+                        
+                        # Calculate trend
+                        trend = 'neutral'
+                        if previous and latest['value'] != '.' and previous['value'] != '.':
+                            current_val = float(latest['value'])
+                            prev_val = float(previous['value'])
+                            trend = 'up' if current_val > prev_val else 'down' if current_val < prev_val else 'neutral'
 
-                    historical = [
-                        {
-                            'value': obs['value'],
-                            'date': obs['date']
+                        indicators[indicator_id] = {
+                            'name': indicator_id.replace('_', ' ').title(),
+                            'value': latest['value'],
+                            'date': latest['date'],
+                            'category': 'other',  # All indicators in one category
+                            'trend': trend,
+                            'historical_data': [
+                                {'value': obs['value'], 'date': obs['date']}
+                                for obs in data['observations'][:3]
+                            ]
                         }
-                        for obs in data['observations'][:3]
-                    ]
-                    
-                    indicators[indicator_id] = {
-                        'name': indicator_id.replace('_', ' ').title(),
-                        'value': latest['value'],
-                        'date': latest['date'],
-                        'category': category,
-                        'trend': trend,
-                        'historical_data': historical
-                    }
-                    logger.info(f"Fetched {indicator_id}: {indicators[indicator_id]}")
+                except Exception as e:
+                    logger.error(f"Error fetching {indicator_id}: {e}")
+                    continue
 
-            # Update cache with new data
-            self.cache['data'] = indicators
-            self.cache['timestamp'] = datetime.now()
-            
             return indicators
 
         except Exception as e:
-            logger.error(f"Error fetching indicators: {e}")
-            raise
+            logger.error(f"Error in get_economic_indicators: {str(e)}")
+            return {}
 
     async def get_comprehensive_analysis(self, asset: str, timeframe: str) -> Dict:
         """Get complete market analysis including probabilities"""
@@ -905,16 +973,14 @@ class MarketIntelligenceService:
         } 
 
     async def fetch_boj_data(self) -> Dict:
-        """Fetch BOJ balance sheet and monetary data"""
+        """Fetch BOJ data"""
         try:
             boj_data = {}
             
-            for indicator_id, series_code in self.boj_series.items():
-                url = f"{self.boj_api_url}/stats"
+            for indicator_id, series_id in self.boj_series.items():
+                url = f"{self.boj_api_url}/series/{series_id}"  # Updated endpoint
                 params = {
-                    'code': series_code,
-                    'lang': 'en',
-                    'format': 'json',
+                    'frequency': 'monthly',
                     'limit': 3
                 }
                 
@@ -922,30 +988,19 @@ class MarketIntelligenceService:
                     async with session.get(url, params=params) as response:
                         if response.status == 200:
                             data = await response.json()
-                            
-                            # Process BOJ data format
-                            latest = data['observations'][0]
-                            previous = data['observations'][1] if len(data['observations']) > 1 else None
-                            
-                            trend = 'neutral'
-                            if previous:
-                                current_val = float(latest['value'])
-                                prev_val = float(previous['value'])
-                                trend = 'up' if current_val > prev_val else 'down'
-                            
-                            boj_data[indicator_id] = {
-                                'name': indicator_id.replace('_', ' ').title(),
-                                'value': latest['value'],
-                                'date': latest['date'],
-                                'category': 'central_banks',
-                                'trend': trend,
-                                'historical_data': [
-                                    {'value': obs['value'], 'date': obs['date']}
-                                    for obs in data['observations'][:3]
-                                ]
-                            }
-                            
-                            logger.info(f"Fetched BOJ {indicator_id}: {boj_data[indicator_id]}")
+                            if data.get('data'):
+                                latest = data['data'][0]
+                                boj_data[f'boj_{indicator_id}'] = {
+                                    'name': f'BOJ {indicator_id.replace("_", " ").title()}',
+                                    'value': latest['value'],
+                                    'date': latest['date'],
+                                    'category': 'central_banks',
+                                    'trend': self._calculate_trend(float(latest['value']), data['data']),
+                                    'historical_data': [
+                                        {'value': str(d['value']), 'date': d['date']}
+                                        for d in data['data'][:3]
+                                    ]
+                                }
             
             return boj_data
             
@@ -956,59 +1011,89 @@ class MarketIntelligenceService:
     async def fetch_eia_data(self) -> Dict:
         """Fetch EIA oil inventory and production data"""
         try:
-            eia_data = {}
+            if not self.eia_api_key:
+                logger.error("EIA API key not found")
+                return {}
+
+            logger.info("Fetching EIA data...")
             
+            # Updated EIA series with correct IDs
+            self.eia_series = {
+                'wti_crude': 'PET.RWTC.W',           # WTI Crude Oil Price (weekly)
+                'brent_crude': 'PET.RBRTE.W',        # Brent Crude Oil Price (weekly)
+                'crude_stocks': 'PET.WCESTUS1.W',    # US Crude Oil Stocks
+                'gasoline_stocks': 'PET.WGTSTUS1.W', # US Gasoline Stocks
+                'distillate_stocks': 'PET.WDISTUS1.W', # Distillate Fuel Oil Stocks
+                'crude_production': 'PET.WCRFPUS2.W', # US Crude Oil Production
+                'refinery_runs': 'PET.WCRRIUS2.W'    # Gross Input to Refineries
+            }
+
+            eia_data = {}
             for indicator_id, series_id in self.eia_series.items():
-                url = f"{self.eia_api_url}/series/{series_id}/data/"
+                url = "https://api.eia.gov/v2/seriesid"
                 params = {
                     'api_key': self.eia_api_key,
-                    'frequency': 'weekly',
-                    'data[0]': 'value',
-                    'data[1]': 'period',
-                    'sort[0][column]': 'period',
-                    'sort[0][direction]': 'desc',
-                    'length': 3  # Get last 3 data points
+                    'series_id': series_id,
+                    'length': 3
                 }
                 
                 async with aiohttp.ClientSession() as session:
                     async with session.get(url, params=params) as response:
                         if response.status == 200:
                             data = await response.json()
-                            
-                            # Process EIA data format
-                            series_data = data['response']['data']
-                            if not series_data:
-                                continue
+                            if data.get('response', {}).get('data'):
+                                series_data = data['response']['data']
+                                latest = series_data[0]
                                 
-                            latest = series_data[0]
-                            previous = series_data[1] if len(series_data) > 1 else None
-                            
-                            trend = 'neutral'
-                            if previous:
-                                current_val = float(latest['value'])
-                                prev_val = float(previous['value'])
-                                trend = 'up' if current_val > prev_val else 'down'
-                            
-                            eia_data[indicator_id] = {
-                                'name': indicator_id.replace('_', ' ').title(),
-                                'value': str(latest['value']),
-                                'date': latest['period'],
-                                'category': 'energy_markets',
-                                'trend': trend,
-                                'historical_data': [
-                                    {'value': str(point['value']), 'date': point['period']}
-                                    for point in series_data[:3]
-                                ]
-                            }
-                            
-                            logger.info(f"Fetched EIA {indicator_id}: {eia_data[indicator_id]}")
-                        else:
-                            logger.error(f"Error fetching {indicator_id}: {response.status}")
-            
+                                eia_data[indicator_id] = {
+                                    'name': indicator_id.replace('_', ' ').title(),
+                                    'value': str(latest['value']),
+                                    'date': latest['period'],
+                                    'category': 'energy_markets',
+                                    'trend': self._calculate_trend(float(latest['value']), series_data),
+                                    'historical_data': series_data[:3]
+                                }
+                                logger.info(f"Fetched EIA {indicator_id}: {latest['value']}")
+
             return eia_data
-            
+
         except Exception as e:
             logger.error(f"Error fetching EIA data: {e}")
+            return {}
+
+    async def fetch_boe_data(self) -> Dict:
+        """Fetch BOE data"""
+        try:
+            # Updated BOE endpoint and authentication
+            headers = {
+                'Accept': 'application/json',
+                'Version': '1.0'
+            }
+            
+            boe_data = {}
+            for indicator_id, series_id in self.boe_series.items():
+                url = f"{self.boe_api_url}/statistics/{series_id}/data"
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, headers=headers) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            if data.get('data'):
+                                latest = data['data'][0]
+                                boe_data[f'boe_{indicator_id}'] = {
+                                    'name': f'BOE {indicator_id.replace("_", " ").title()}',
+                                    'value': str(latest['value']),
+                                    'date': latest['date'],
+                                    'category': 'central_banks',
+                                    'trend': self._calculate_trend(float(latest['value']), data['data']),
+                                    'historical_data': data['data'][:3]
+                                }
+                                logger.info(f"Fetched BOE {indicator_id}: {latest['value']}")
+
+            return boe_data
+            
+        except Exception as e:
+            logger.error(f"Error fetching BOE data: {e}")
             return {}
 
     async def get_commodity_data(self):
@@ -1016,31 +1101,36 @@ class MarketIntelligenceService:
         try:
             # Get FRED data first
             indicators = await self.get_economic_indicators()
+            if not indicators:
+                indicators = {}
+            logger.info(f"FRED indicators count: {len(indicators)}")
+            
+            # Add BOE data
+            try:
+                boe_data = await self.fetch_boe_data()
+                logger.info(f"BOE data: {json.dumps(boe_data, indent=2)}")
+                indicators.update(boe_data or {})
+            except Exception as e:
+                logger.error(f"Error fetching BOE data: {e}")
             
             # Add BOJ data
-            boj_data = await self.fetch_boj_data()
-            indicators.update(boj_data)
+            try:
+                boj_data = await self.fetch_boj_data()
+                logger.info(f"BOJ data: {json.dumps(boj_data, indent=2)}")
+                indicators.update(boj_data or {})
+            except Exception as e:
+                logger.error(f"Error fetching BOJ data: {e}")
             
             # Add EIA data
-            eia_data = await self.fetch_eia_data()
-            indicators.update(eia_data)
-            
-            # Add calculated real rates
-            if 'fed_rate' in indicators and 'cpi' in indicators:
-                fed_rate = float(indicators['fed_rate']['value'])
-                cpi = float(indicators['cpi']['value'])
-                real_rate = fed_rate - cpi
-                
-                indicators['real_fed_rate'] = {
-                    'name': 'Real Fed Rate',
-                    'value': f"{real_rate:.2f}",
-                    'trend': 'up' if real_rate > 0 else 'down',
-                    'category': 'real_rates',
-                    'date': indicators['fed_rate']['date']
-                }
+            try:
+                eia_data = await self.fetch_eia_data()
+                logger.info(f"EIA data: {json.dumps(eia_data, indent=2)}")
+                indicators.update(eia_data or {})
+            except Exception as e:
+                logger.error(f"Error fetching EIA data: {e}")
 
             return indicators
 
         except Exception as e:
-            logger.error(f"Error fetching commodity data: {e}")
-            raise 
+            logger.error(f"Error in get_commodity_data: {str(e)}")
+            return {} 

@@ -33,17 +33,15 @@ async def get_economic_indicators():
         logger.error(f"Error: {e}")
         return jsonify({'error': str(e)}), 500
 
-@market_bp.route('/api/clear-cache', methods=['POST'])
+@market_bp.route('/clear-cache', methods=['POST'])
 async def clear_cache():
-    """Clear all cached data"""
+    """Clear all caches"""
     try:
-        # Clear the indicators cache
-        market_service.cache = {
-            'data': None,
-            'timestamp': None
-        }
-        logger.info("Cache cleared successfully")
-        return jsonify({'status': 'success', 'message': 'Cache cleared'})
+        success = market_service.clear_cache()
+        if success:
+            return {'message': 'Cache cleared successfully'}, 200
+        else:
+            return {'error': 'Failed to clear cache'}, 500
     except Exception as e:
         logger.error(f"Error clearing cache: {e}")
-        return jsonify({'error': str(e)}), 500 
+        return {'error': str(e)}, 500 
