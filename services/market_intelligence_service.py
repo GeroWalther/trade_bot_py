@@ -76,6 +76,20 @@ class MarketIntelligenceService:
             'expiry': 3600  # Cache expires after 1 hour
         }
 
+        # Asset-specific indicators
+        self.asset_specific_indicators = {
+            'forex': {
+                'euro_sentiment': 'EUSSI',      # Euro Area Sentiment
+                'uk_rate': 'BOERUKM',          # UK Interest Rate
+                'swiss_rate': 'SNBCHM',        # Swiss Interest Rate
+                'us_rate': 'DFF'               # US Federal Funds Rate
+            },
+            'commodities': {
+                'oil_supply': 'WCESTUS1',      # US Oil Supply
+                'gold_demand': 'GOLDAMGBD228NLBM'  # Gold Fixing Price
+            }
+        }
+
         logger.info("Market Intelligence Service initialized successfully")
 
     @rate_limit_decorator(max_requests=5, window=1)
@@ -108,99 +122,39 @@ class MarketIntelligenceService:
             logger.error(f"Error fetching FRED data for {series_id}: {e}")
             return None
 
-    async def get_economic_indicators(self) -> Dict:
-        """Get key economic indicators from FRED with caching"""
+    async def get_economic_indicators(self, asset_type=None, core_only=False):
+        """Get economic indicators with caching"""
         try:
             # Check cache first
             if self.cache['data'] and self.cache['timestamp']:
                 if (datetime.now() - self.cache['timestamp']).seconds < self.cache['expiry']:
+                    if core_only:
+                        return {k: v for k, v in self.cache['data'].items() if k in self.series_ids}
+                    if asset_type:
+                        return {k: v for k, v in self.cache['data'].items() 
+                                if k in self.asset_specific_indicators.get(asset_type, [])}
                     return self.cache['data']
 
-            indicators = {}
+            # If not in cache, fetch fresh data
             end_date = datetime.now()
             start_date = end_date - timedelta(days=30)
+            
+            indicators = {}
+            
+            # Always fetch core indicators
+            if core_only or not asset_type:
+                for series_id, fred_id in self.series_ids.items():
+                    data = await self._fetch_fred_data(fred_id, start_date, end_date)
+                    if data:
+                        indicators[series_id] = self._process_indicator_data(data, series_id)
 
-            # Core indicators metadata
-            core_indicators = {
-                'cpi': {
-                    'name': 'CPI (YoY)',
-                    'description': 'Consumer Price Index',
-                    'importance': 96,
-                    'correlation': 92
-                },
-                'core_cpi': {
-                    'name': 'Core CPI (YoY)',
-                    'description': 'CPI excluding food and energy',
-                    'importance': 95,
-                    'correlation': 90
-                },
-                'fed_rate': {
-                    'name': 'Fed Funds Rate',
-                    'description': 'Federal Funds Rate',
-                    'importance': 96,
-                    'correlation': 92
-                },
-                'unemployment': {
-                    'name': 'Unemployment Rate',
-                    'description': 'U.S. Unemployment Rate',
-                    'importance': 94,
-                    'correlation': 88
-                },
-                'nfp': {
-                    'name': 'Non-Farm Payrolls',
-                    'description': 'U.S. Jobs Data',
-                    'importance': 96,
-                    'correlation': 91
-                },
-                'consumer_conf': {
-                    'name': 'Consumer Confidence',
-                    'description': 'Consumer Confidence Index',
-                    'importance': 93,
-                    'correlation': 87
-                },
-                'repo_liquidity': {
-                    'name': 'Repo Market Liquidity',
-                    'description': 'Reverse Repo Operations',
-                    'importance': 94,
-                    'correlation': 88
-                }
-            }
-
-            # Fetch all indicators
-            for indicator_id, metadata in core_indicators.items():
-                series_id = self.series_ids[indicator_id]
-                data = await self._fetch_fred_data(series_id, start_date, end_date)
-                
-                if data and data.get('observations'):
-                    try:
-                        # Handle missing or invalid values
-                        latest_value = data['observations'][0]['value']
-                        latest_value = 0.0 if latest_value == '.' else float(latest_value)
-                        
-                        prev_value = data['observations'][1]['value'] if len(data['observations']) > 1 else latest_value
-                        prev_value = 0.0 if prev_value == '.' else float(prev_value)
-                        
-                        historical_data = [
-                            {
-                                'value': 0.0 if obs['value'] == '.' else float(obs['value']),
-                                'date': obs['date']
-                            }
-                            for obs in data['observations'][:3]
-                        ]
-
-                        indicators[indicator_id] = {
-                            'name': metadata['name'],
-                            'description': metadata['description'],
-                            'value': f"{latest_value:.2f}%",
-                            'trend': 'up' if latest_value > prev_value else 'down',
-                            'importance': metadata['importance'],
-                            'correlation': metadata['correlation'],
-                            'latest_release': data['observations'][0]['date'],
-                            'historical_data': historical_data
-                        }
-                    except Exception as e:
-                        logger.error(f"Error processing indicator {indicator_id}: {e}")
-                        continue
+            # Fetch asset-specific indicators if requested
+            if asset_type and not core_only:
+                asset_indicators = self.asset_specific_indicators.get(asset_type, {})
+                for indicator_id, fred_id in asset_indicators.items():
+                    data = await self._fetch_fred_data(fred_id, start_date, end_date)
+                    if data:
+                        indicators[indicator_id] = self._process_indicator_data(data, indicator_id)
 
             # Update cache
             self.cache['data'] = indicators
@@ -210,7 +164,7 @@ class MarketIntelligenceService:
 
         except Exception as e:
             logger.error(f"Error fetching economic indicators: {e}")
-            return {}
+            raise
 
     async def get_comprehensive_analysis(self, asset: str, timeframe: str) -> Dict:
         """Get complete market analysis including probabilities"""
@@ -570,4 +524,93 @@ class MarketIntelligenceService:
                     'strength': 'WEAK'
                 }
             }
-        } 
+        }
+
+    def _process_indicator_data(self, data: Dict, indicator_id: str) -> Dict:
+        """Process raw FRED data into formatted indicator data"""
+        try:
+            if not data or not data.get('observations'):
+                return None
+
+            # Core indicators metadata
+            indicators_metadata = {
+                'cpi': {
+                    'name': 'CPI (YoY)',
+                    'description': 'Consumer Price Index',
+                    'importance': 96,
+                    'correlation': 92
+                },
+                'core_cpi': {
+                    'name': 'Core CPI (YoY)',
+                    'description': 'CPI excluding food and energy',
+                    'importance': 95,
+                    'correlation': 90
+                },
+                'fed_rate': {
+                    'name': 'Fed Funds Rate',
+                    'description': 'Federal Funds Rate',
+                    'importance': 96,
+                    'correlation': 92
+                },
+                'unemployment': {
+                    'name': 'Unemployment Rate',
+                    'description': 'U.S. Unemployment Rate',
+                    'importance': 94,
+                    'correlation': 88
+                },
+                'nfp': {
+                    'name': 'Non-Farm Payrolls',
+                    'description': 'U.S. Jobs Data',
+                    'importance': 96,
+                    'correlation': 91
+                },
+                'consumer_conf': {
+                    'name': 'Consumer Confidence',
+                    'description': 'Consumer Confidence Index',
+                    'importance': 93,
+                    'correlation': 87
+                },
+                'repo_liquidity': {
+                    'name': 'Repo Market Liquidity',
+                    'description': 'Reverse Repo Operations',
+                    'importance': 94,
+                    'correlation': 88
+                }
+            }
+
+            metadata = indicators_metadata.get(indicator_id, {
+                'name': indicator_id.replace('_', ' ').title(),
+                'description': 'Economic Indicator',
+                'importance': 90,
+                'correlation': 85
+            })
+
+            # Handle missing or invalid values
+            latest_value = data['observations'][0]['value']
+            latest_value = 0.0 if latest_value == '.' else float(latest_value)
+            
+            prev_value = data['observations'][1]['value'] if len(data['observations']) > 1 else latest_value
+            prev_value = 0.0 if prev_value == '.' else float(prev_value)
+            
+            historical_data = [
+                {
+                    'value': 0.0 if obs['value'] == '.' else float(obs['value']),
+                    'date': obs['date']
+                }
+                for obs in data['observations'][:3]
+            ]
+
+            return {
+                'name': metadata['name'],
+                'description': metadata['description'],
+                'value': f"{latest_value:.2f}%",
+                'trend': 'up' if latest_value > prev_value else 'down',
+                'importance': metadata['importance'],
+                'correlation': metadata['correlation'],
+                'latest_release': data['observations'][0]['date'],
+                'historical_data': historical_data
+            }
+
+        except Exception as e:
+            logger.error(f"Error processing indicator {indicator_id}: {e}")
+            return None 

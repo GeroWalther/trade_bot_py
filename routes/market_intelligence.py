@@ -24,18 +24,35 @@ async def get_market_intelligence():
 async def get_economic_indicators():
     """Get economic indicators from FRED"""
     try:
-        logger.info("Fetching economic indicators from FRED")
-        indicators = await market_service.get_economic_indicators()
+        # Get parameters from request
+        asset_type = request.args.get('asset_type')
+        core_only = request.args.get('core', 'false').lower() == 'true'
+        
+        logger.info(f"Fetching indicators - asset_type: {asset_type}, core_only: {core_only}")
+        
+        # Initialize service if not already done
+        if not hasattr(market_bp, 'market_intelligence'):
+            market_bp.market_intelligence = MarketIntelligenceService()
+        
+        # Get indicators
+        indicators = await market_bp.market_intelligence.get_economic_indicators(
+            asset_type=asset_type if not core_only else None,
+            core_only=core_only
+        )
         
         if not indicators:
+            logger.warning("No indicators returned")
             return jsonify({
                 'status': 'error',
-                'message': 'Failed to fetch economic indicators'
-            }), 500
+                'message': 'No indicators found'
+            }), 404
             
-        logger.info(f"Successfully retrieved economic indicators: {indicators}")
+        logger.info(f"Successfully retrieved {len(indicators)} indicators")
         return jsonify(indicators)
         
     except Exception as e:
         logger.error(f"Error getting economic indicators: {e}")
-        return jsonify({'error': str(e)}), 500 
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500 
