@@ -26,31 +26,24 @@ async def get_market_intelligence():
 async def get_economic_indicators():
     """Get economic indicators from FRED"""
     try:
-        # Get parameters from request
-        asset_type = request.args.get('asset_type')
-        core_only = request.args.get('core', 'false').lower() == 'true'
-        
-        logger.info(f"Fetching indicators - asset_type: {asset_type}, core_only: {core_only}")
-        
-        # Get indicators using the module-level service
-        indicators = await market_service.get_economic_indicators(
-            asset_type=asset_type if not core_only else None,
-            core_only=core_only
-        )
-        
-        if not indicators:
-            logger.warning("No indicators returned")
-            return jsonify({
-                'status': 'error',
-                'message': 'No indicators found'
-            }), 404
-            
-        logger.info(f"Successfully retrieved {len(indicators)} indicators")
+        indicators = await market_service.get_economic_indicators()
+        logger.info(f"All indicators: {indicators}")  # Log everything
         return jsonify(indicators)
-        
     except Exception as e:
-        logger.error(f"Error getting economic indicators: {e}")
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 500 
+        logger.error(f"Error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@market_bp.route('/api/clear-cache', methods=['POST'])
+async def clear_cache():
+    """Clear all cached data"""
+    try:
+        # Clear the indicators cache
+        market_service.cache = {
+            'data': None,
+            'timestamp': None
+        }
+        logger.info("Cache cleared successfully")
+        return jsonify({'status': 'success', 'message': 'Cache cleared'})
+    except Exception as e:
+        logger.error(f"Error clearing cache: {e}")
+        return jsonify({'error': str(e)}), 500 

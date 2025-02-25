@@ -47,94 +47,79 @@ class MarketIntelligenceService:
             logger.error("FRED API key not found")
             raise ValueError("FRED API key is required")
         
-        # Core indicators
+        # Initialize cache
+        self.cache = {
+            'data': None,
+            'timestamp': None
+        }
+
+        # Comprehensive list of important indicators
         self.series_ids = {
+            # Core Economic
             'cpi': 'CPIAUCSL',            # CPI
             'core_cpi': 'CPILFESL',       # Core CPI
-            'fed_rate': 'FEDFUNDS',        # Fed Funds Rate
+            'fed_rate': 'FEDFUNDS',       # Fed Funds Rate
             'unemployment': 'UNRATE',      # Unemployment Rate
             'nfp': 'PAYEMS',              # Non-Farm Payrolls
             'consumer_conf': 'UMCSENT',    # Consumer Confidence
             'repo_liquidity': 'RRPONTSYD', # Reverse Repo Operations
+            'gdp': 'GDP',                  # Gross Domestic Product
+            'retail_sales': 'RSAFS',       # Retail Sales
+            'industrial_prod': 'INDPRO',   # Industrial Production
+            
+            # Interest Rates & Bonds
+            'treasury_10y': 'DGS10',       # 10-Year Treasury Rate
+            'treasury_2y': 'DGS2',         # 2-Year Treasury Rate
+            'yield_curve': 'T10Y2Y',       # 10Y-2Y Spread
+            'mortgage_rate': 'MORTGAGE30US', # 30-Year Mortgage Rate
+            
+            # Money & Banking
+            'money_supply': 'M2SL',        # M2 Money Supply
+            'bank_credit': 'TOTBKCR',      # Total Bank Credit
+            
+            # International
+            'dollar_index': 'DTWEXBGS',    # Dollar Index
+            'trade_balance': 'BOPGSTB',    # Trade Balance
+            'foreign_reserves': 'TRESEGUSM052N', # Foreign Holdings of Treasuries
+            
+            # Market Related
+            'sp500': 'SP500',              # S&P 500
+            'vix': 'VIXCLS',               # VIX Volatility Index
+            'credit_spread': 'BAA10Y',     # Corporate Bond Spread
+            'commodities': 'PPIACO',       # Producer Price Index
+            'oil_price': 'DCOILWTICO'      # WTI Crude Oil Price
         }
 
-        # Units map for each series
-        self.units_map = {
-            'CPIAUCSL': 'pc1',      # Percent change
-            'CPILFESL': 'pc1',      # Percent change
-            'FEDFUNDS': 'lin',      # Linear (actual rate)
-            'UNRATE': 'lin',        # Linear (actual rate)
-            'PAYEMS': 'pc1',        # Percent change
-            'UMCSENT': 'lin',       # Linear (actual index)
-            'RRPONTSYD': 'pc1',     # Percent change
-        }
+    def _should_refresh_cache(self) -> bool:
+        """Check if cache should be refreshed based on current date"""
+        if not self.cache['timestamp']:
+            return True
+            
+        current_date = datetime.now()
+        cache_date = self.cache['timestamp']
+        
+        # Refresh if:
+        # 1. It's a new month (1st day)
+        # 2. We're in a different month than the cache
+        # 3. Cache is from previous year
+        return (current_date.day == 1 or 
+                current_date.month != cache_date.month or 
+                current_date.year != cache_date.year)
 
-        # Asset-specific indicators
-        self.asset_specific_indicators = {
-            'precious_metals': {
-                'real_interest': {
-                    'name': 'Real Interest Rate',
-                    'series': ['DGS10', 'CPIAUCSL'],  # Treasury - Inflation
-                    'description': 'Real Interest Rate (10Y - CPI)'
-                },
-                'dollar_index': 'DTWEXBGS',           # Dollar Index
-                'inflation_5y': 'T5YIE',              # 5Y Inflation Expectations
-                'inflation_10y': 'T10YIE',            # 10Y Inflation Expectations
-                'money_supply': 'M2SL'                # M2 Money Supply
-            },
-            'oil': {
-                'inventories': 'WCESTUS1',            # Oil Inventories
-                'industrial_prod': 'INDPRO',          # Industrial Production
-                'gdp_growth': 'GDPC1',               # GDP Growth
-                'dollar_strength': 'DTWEXBGS'         # Dollar Index
-            },
-            'forex': {
-                'fed_rate': 'DFF',                    # Fed Funds Rate
-                'japan_rate': 'IR3TIB01JPM156N',      # Japan Interest Rate
-                'ecb_rate': 'ECBDFR',                 # ECB Rate
-                'trade_balance': 'BOPGSTB',           # Trade Balance
-                'pmi_us': 'NAPM',                     # US PMI
-                'current_account': 'BOPBCA'           # Current Account Balance
-            },
-            'stocks': {
-                'earnings': 'EPSI',                   # Corporate Earnings
-                'yield_curve': 'T10Y2Y',              # Yield Curve
-                'consumer_spending': 'PCE'             # Consumer Spending
-            }
-        }
-
-        # Initialize cache
-        self.cache = {
-            'data': None,
-            'timestamp': None,
-            'expiry': 3600  # Cache expires after 1 hour
-        }
-
-        logger.info("Market Intelligence Service initialized successfully")
-
-    @rate_limit_decorator(max_requests=5, window=1)
-    async def _fetch_fred_data(self, series_id: str, start_date: datetime, end_date: datetime) -> Optional[Dict]:
-        """Fetch data from FRED API with rate limiting"""
+    async def _fetch_fred_data(self, series_id: str) -> Optional[Dict]:
+        """Simple FRED API fetch"""
         try:
             url = f"{self.base_url}/observations"
-            
             params = {
                 'series_id': series_id,
                 'api_key': self.fred_api_key,
                 'file_type': 'json',
                 'sort_order': 'desc',
-                'observation_start': start_date.strftime('%Y-%m-%d'),
-                'observation_end': end_date.strftime('%Y-%m-%d'),
-                'units': self.units_map.get(series_id, 'lin'),
-                'frequency': 'm',  # Monthly frequency
-                'aggregation_method': 'avg'  # Average for the period
+                'limit': 3  # Changed from 1 to 3 to get last 3 observations
             }
             
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, params=params) as response:
-                    if response.status == 429:  # Too Many Requests
-                        logger.warning(f"Rate limit hit for {series_id}, will retry later")
-                        return None
                     response.raise_for_status()
                     return await response.json()
 
@@ -142,44 +127,57 @@ class MarketIntelligenceService:
             logger.error(f"Error fetching FRED data for {series_id}: {e}")
             return None
 
-    async def get_economic_indicators(self, asset_type=None, core_only=False):
-        """Get economic indicators with caching"""
+    async def get_economic_indicators(self):
+        """Get all economic indicators with monthly caching"""
         try:
-            # Check cache first
-            if self.cache['data'] and self.cache['timestamp']:
-                if (datetime.now() - self.cache['timestamp']).seconds < self.cache['expiry']:
-                    return self.cache['data']
+            # Check if we should use cache
+            if self.cache['data'] and not self._should_refresh_cache():
+                logger.info("Using cached indicators from: " + 
+                          self.cache['timestamp'].strftime('%Y-%m-%d'))
+                return self.cache['data']
 
-            # If not in cache, fetch fresh data
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=30)
-            
+            logger.info("Fetching fresh indicators data")
             indicators = {}
             
-            # Fetch core indicators
-            for series_id, fred_id in self.series_ids.items():
-                data = await self._fetch_fred_data(fred_id, start_date, end_date)
-                if data:
-                    indicators[series_id] = self._process_indicator_data(data, series_id, 'core')
+            for indicator_id, series_id in self.series_ids.items():
+                data = await self._fetch_fred_data(series_id)
+                if data and data.get('observations'):
+                    latest = data['observations'][0]
+                    previous = data['observations'][1] if len(data['observations']) > 1 else None
+                    
+                    # Calculate trend
+                    trend = 'neutral'
+                    if previous and latest['value'] != '.' and previous['value'] != '.':
+                        current_val = float(latest['value'])
+                        prev_val = float(previous['value'])
+                        trend = 'up' if current_val > prev_val else 'down' if current_val < prev_val else 'neutral'
+                        
+                    historical = [
+                        {
+                            'value': obs['value'],
+                            'date': obs['date']
+                        }
+                        for obs in data['observations'][:3]
+                    ]
+                    
+                    indicators[indicator_id] = {
+                        'name': indicator_id.replace('_', ' ').title(),
+                        'value': latest['value'],
+                        'date': latest['date'],
+                        'category': 'core',
+                        'trend': trend,
+                        'historical_data': historical
+                    }
+                    logger.info(f"Fetched {indicator_id}: {indicators[indicator_id]}")
 
-            # Fetch all asset-specific indicators
-            for category, asset_indicators in self.asset_specific_indicators.items():
-                for indicator_id, fred_id in asset_indicators.items():
-                    if isinstance(fred_id, dict):  # Handle composite indicators
-                        # TODO: Implement composite indicator processing
-                        continue
-                    data = await self._fetch_fred_data(fred_id, start_date, end_date)
-                    if data:
-                        indicators[indicator_id] = self._process_indicator_data(data, indicator_id, category)
-
-            # Update cache
+            # Update cache with new data
             self.cache['data'] = indicators
             self.cache['timestamp'] = datetime.now()
             
             return indicators
 
         except Exception as e:
-            logger.error(f"Error fetching economic indicators: {e}")
+            logger.error(f"Error fetching indicators: {e}")
             raise
 
     async def get_comprehensive_analysis(self, asset: str, timeframe: str) -> Dict:
@@ -540,7 +538,7 @@ class MarketIntelligenceService:
                     'strength': 'WEAK'
                 }
             }
-        }
+        } 
 
     def _process_indicator_data(self, data: Dict, indicator_id: str, category: str = None) -> Dict:
         """Process raw FRED data into formatted indicator data"""
