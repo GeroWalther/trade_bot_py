@@ -90,6 +90,230 @@ class MarketIntelligenceService:
             'oil_price': 'DCOILWTICO'      # WTI Crude Oil Price
         }
 
+        # Add new indicators to series_ids
+        self.series_ids.update({
+            # Market Liquidity
+            'm2_growth': 'M2SL',          # M2 Money Supply Growth
+            'repo_volume': 'RRPONTSYD',   # Repo Market Volume
+            
+            # Corporate Bond Metrics
+            'corp_aaa': 'AAA',            # AAA Corporate Bond Yield
+            'corp_baa': 'BAA',            # BAA Corporate Bond Yield
+            'high_yield_spread': 'BAMLH0A0HYM2',  # High Yield Spread
+            'inv_grade_spread': 'BAMLC0A0CM',     # Investment Grade Spread
+            
+            # Stock Market Metrics
+            'nasdaq_vol': 'VXNCLS',       # NASDAQ Volatility Index
+            'semi_index': 'SOX',          # Philadelphia Semiconductor Index
+            'adv_decline': 'ADVN',        # NYSE Advance-Decline Line
+            'new_highs': 'NHNL',          # New Highs minus New Lows
+            
+            # Valuation Metrics
+            'sp500_pe': 'SP500_PE_RATIO_MONTH',  # S&P 500 P/E Ratio
+            'sp500_pb': 'SP500_PB_RATIO',        # S&P 500 P/B Ratio
+            
+            # Sentiment Indicators
+            'put_call_ratio': 'PCALLS',   # Put/Call Ratio
+            'margin_debt': 'BOGZ1FL663067003Q',  # Margin Debt
+            
+            # Additional Market Health
+            'institutional_flows': 'BOGZ1FL563064105Q',  # Institutional Investment Flows
+            'earnings_growth': 'SP500_EARNINGS_GROWTH',  # S&P 500 Earnings Growth Rate
+        })
+
+        # Add forex-specific indicators
+        self.series_ids.update({
+            # Interest Rate Differentials
+            'fed_rate': 'FEDFUNDS',        # Federal Reserve Rate
+            'ecb_rate': 'ECBDFR',          # ECB Deposit Facility Rate
+            'boe_rate': 'BOERUKM',         # Bank of England Rate
+            'boj_rate': 'INTDSRJPM193N',   # Bank of Japan Rate
+            
+            # Central Bank Balance Sheets
+            'fed_assets': 'WALCL',         # Federal Reserve Total Assets
+            'ecb_assets': 'ECBASSETS',     # ECB Total Assets
+            'boj_assets': 'BOJASSETS',     # BOJ Total Assets
+            
+            # Exchange Rate Metrics
+            'reer_usd': 'RBXRBIS',        # Real Broad Effective Exchange Rate for United States
+            'reer_eur': 'RBXMBIS',        # Real Broad Effective Exchange Rate for Euro Area
+            'reer_jpy': 'RBJPBIS',        # Real Broad Effective Exchange Rate for Japan
+            'trade_weighted_usd': 'DTWEXB', # Trade Weighted U.S. Dollar Index
+            
+            # Capital Flows
+            'tic_holdings': 'WMTSLA',      # Foreign Holdings of Treasury Securities
+            'foreign_flows': 'NETFLI',     # Net Foreign Security Purchases
+            
+            # Risk & Sentiment
+            'geopolitical_risk': 'GPRI',   # Geopolitical Risk Index
+            'policy_uncertainty': 'USEPUINDXD', # Economic Policy Uncertainty Index
+            'vix_currency': 'VXEFXCLS',    # Currency Volatility Index
+            
+            # Positioning & Flows
+            'cot_euro': 'EUCFTC',          # EUR Commitment of Traders
+            'cot_yen': 'JPYCFTC',          # JPY Commitment of Traders
+            'cot_gbp': 'GBPCFTC',          # GBP Commitment of Traders
+        })
+
+        # Add commodity-specific indicators
+        self.series_ids.update({
+            # Oil & Energy
+            'crude_inventories': 'WTTSTUS1',    # US Crude Oil Stocks
+            'oil_production': 'PROMUS',         # US Oil Production
+            'rig_count': 'RIGCOUNT',           # US Oil Rig Count (Baker Hughes)
+            'gasoline_stocks': 'WGRSTUS1',     # US Gasoline Stocks
+            
+            # Precious Metals
+            'gold_price': 'GOLDAMGBD228NLBM',  # London Gold Fixing Price
+            'silver_price': 'SLVPRUSD',        # Silver Price
+            'gold_etf': 'GLDTONS',             # Gold ETF Holdings
+            'silver_etf': 'SLVTONS',           # Silver ETF Holdings
+            'cb_gold_reserves': 'GOLDRESERVES', # Central Bank Gold Reserves
+            
+            # Interest Rates & Inflation
+            'real_rate_5y': 'DFII5',           # 5-Year TIPS Rate
+            'real_rate_10y': 'DFII10',         # 10-Year TIPS Rate
+            'breakeven_5y': 'T5YIE',           # 5-Year Breakeven Inflation Rate
+            'breakeven_10y': 'T10YIE',         # 10-Year Breakeven Inflation Rate
+            'tips_spread': 'TIPSSPREAD',       # TIPS Spread
+            
+            # Dollar & Currency
+            'dxy_index': 'DTWEXBGS',          # Dollar Index (Broad)
+            'dollar_major': 'DTWEXM',         # Dollar vs Major Currencies
+            
+            # Global Demand
+            'china_imports': 'XTIMVA01CNM657S', # China Import Value
+            'india_imports': 'XTIMVA01INM657S', # India Import Value
+            'global_trade': 'WTRADE',          # World Trade Volume
+        })
+
+        # Group indicators by category
+        self.indicator_categories = {
+            'market_liquidity': ['m2_growth', 'repo_volume'],
+            'credit_markets': ['corp_aaa', 'corp_baa', 'high_yield_spread', 'inv_grade_spread'],
+            'market_breadth': ['adv_decline', 'new_highs', 'nasdaq_vol'],
+            'valuations': ['sp500_pe', 'sp500_pb', 'earnings_growth'],
+            'sentiment': ['put_call_ratio', 'margin_debt', 'institutional_flows']
+        }
+
+        # Add new category for forex indicators
+        self.indicator_categories.update({
+            'forex_rates': [
+                'fed_rate', 'ecb_rate', 'boe_rate', 'boj_rate'
+            ],
+            'central_banks': [
+                'fed_assets', 'ecb_assets', 'boj_assets'
+            ],
+            'exchange_rates': [
+                'reer_usd', 'reer_eur', 'reer_jpy', 'trade_weighted_usd'
+            ],
+            'capital_flows': [
+                'tic_holdings', 'foreign_flows'
+            ],
+            'forex_risk': [
+                'geopolitical_risk', 'policy_uncertainty', 'vix_currency'
+            ],
+            'positioning': [
+                'cot_euro', 'cot_yen', 'cot_gbp'
+            ]
+        })
+
+        # Add new categories
+        self.indicator_categories.update({
+            'energy_markets': [
+                'crude_inventories', 'oil_production', 'rig_count', 
+                'gasoline_stocks'
+            ],
+            'precious_metals': [
+                'gold_price', 'silver_price', 'gold_etf', 'silver_etf',
+                'cb_gold_reserves'
+            ],
+            'real_rates': [
+                'real_rate_5y', 'real_rate_10y', 'breakeven_5y',
+                'breakeven_10y', 'tips_spread'
+            ],
+            'currency_strength': [
+                'dxy_index', 'dollar_major'
+            ],
+            'global_demand': [
+                'china_imports', 'india_imports', 'global_trade'
+            ]
+        })
+
+        # Add metadata for better display
+        self.indicators_metadata = {
+            'fed_rate': {
+                'name': 'Federal Reserve Rate',
+                'description': 'US Federal Funds Rate',
+                'importance': 98,
+                'correlation': 95
+            },
+            'ecb_rate': {
+                'name': 'ECB Rate',
+                'description': 'European Central Bank Deposit Rate',
+                'importance': 95,
+                'correlation': 90
+            },
+            'crude_inventories': {
+                'name': 'US Crude Inventories',
+                'description': 'Weekly US commercial crude oil inventories',
+                'importance': 92,
+                'correlation': 85
+            },
+            'gold_price': {
+                'name': 'Gold Price',
+                'description': 'London Gold Fixing Price USD/oz',
+                'importance': 95,
+                'correlation': 88
+            },
+            'real_rate_10y': {
+                'name': '10Y Real Rate',
+                'description': '10-Year Treasury Inflation-Protected Security Rate',
+                'importance': 94,
+                'correlation': 90
+            },
+            'dxy_index': {
+                'name': 'Dollar Index',
+                'description': 'Trade Weighted US Dollar Index',
+                'importance': 96,
+                'correlation': 92
+            }
+        }
+
+        # Add new API endpoints
+        self.boj_api_url = 'https://www.stat-search.boj.or.jp/api/v1'
+        self.eia_api_url = 'https://api.eia.gov/v2'
+        self.eia_api_key = os.getenv('EIA_API_KEY')
+        
+        if not self.eia_api_key:
+            logger.error("EIA API key not found")
+            raise ValueError("EIA API key is required")
+
+        # Add BOJ and EIA specific series
+        self.boj_series = {
+            'total_assets': 'BJ01MDAB11',      # BOJ Total Assets (fixed syntax)
+            'monetary_base': 'BJ01MABS1A',      # Monetary Base
+            'bond_holdings': 'BJ01MABA1A',      # JGB Holdings
+            'etf_holdings': 'BJ01MABA2A',       # ETF Holdings
+        }
+
+        # Update EIA series with correct API v2 format based on documentation
+        self.eia_series = {
+            # Weekly Petroleum Status Report series
+            'crude_stocks': 'PET.WCESTUS1.W',        # Weekly Crude Oil Stocks
+            'gasoline_stocks': 'PET.WGTSTUS1.W',     # Weekly Gasoline Stocks
+            'distillate_stocks': 'PET.WDISTUS1.W',   # Weekly Distillate Stocks
+            'crude_production': 'PET.WCRFPUS2.W',    # Weekly Crude Production
+            'refinery_input': 'PET.WCRRIUS2.W',      # Weekly Refinery Input
+            'crude_imports': 'PET.WCEIMUS2.W',       # Weekly Crude Imports
+            
+            # Additional oil market indicators
+            'crude_price': 'PET.RWTC.D',            # WTI Crude Oil Price
+            'gasoline_price': 'PET.EMM_EPM0_PTE_NUS_DPG.W',  # Weekly Retail Gasoline Price
+            'refinery_capacity': 'PET.WPULEUS3.W',  # Weekly Refinery Utilization
+            'crude_exports': 'PET.WCREXUS2.W',      # Weekly Crude Exports
+        }
+
     def _should_refresh_cache(self) -> bool:
         """Check if cache should be refreshed based on current date"""
         if not self.cache['timestamp']:
@@ -151,7 +375,14 @@ class MarketIntelligenceService:
                         current_val = float(latest['value'])
                         prev_val = float(previous['value'])
                         trend = 'up' if current_val > prev_val else 'down' if current_val < prev_val else 'neutral'
-                        
+                    
+                    # Find category
+                    category = 'other'
+                    for cat, ids in self.indicator_categories.items():
+                        if indicator_id in ids:
+                            category = cat
+                            break
+
                     historical = [
                         {
                             'value': obs['value'],
@@ -164,7 +395,7 @@ class MarketIntelligenceService:
                         'name': indicator_id.replace('_', ' ').title(),
                         'value': latest['value'],
                         'date': latest['date'],
-                        'category': 'core',
+                        'category': category,
                         'trend': trend,
                         'historical_data': historical
                     }
@@ -629,3 +860,187 @@ class MarketIntelligenceService:
         except Exception as e:
             logger.error(f"Error processing indicator {indicator_id}: {e}")
             return None 
+
+    async def verify_series_ids(self):
+        """Verify all series IDs exist in FRED and log results"""
+        logger.info("Verifying FRED series IDs...")
+        invalid_series = []
+        valid_series = []
+        
+        for indicator_id, series_id in self.series_ids.items():
+            try:
+                url = f"{self.base_url}/series"
+                params = {
+                    'series_id': series_id,
+                    'api_key': self.fred_api_key,
+                    'file_type': 'json'
+                }
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, params=params) as response:
+                        if response.status == 200:
+                            valid_series.append((indicator_id, series_id))
+                            logger.info(f"✓ Valid series: {indicator_id} ({series_id})")
+                        else:
+                            invalid_series.append((indicator_id, series_id))
+                            logger.error(f"✗ Invalid series: {indicator_id} ({series_id})")
+            
+            except Exception as e:
+                invalid_series.append((indicator_id, series_id))
+                logger.error(f"Error verifying {indicator_id} ({series_id}): {e}")
+        
+        # Log summary
+        logger.info(f"\nVerification Summary:")
+        logger.info(f"Valid series: {len(valid_series)}")
+        logger.info(f"Invalid series: {len(invalid_series)}")
+        
+        if invalid_series:
+            logger.warning("\nInvalid Series List:")
+            for indicator_id, series_id in invalid_series:
+                logger.warning(f"- {indicator_id}: {series_id}")
+        
+        return {
+            'valid': valid_series,
+            'invalid': invalid_series
+        } 
+
+    async def fetch_boj_data(self) -> Dict:
+        """Fetch BOJ balance sheet and monetary data"""
+        try:
+            boj_data = {}
+            
+            for indicator_id, series_code in self.boj_series.items():
+                url = f"{self.boj_api_url}/stats"
+                params = {
+                    'code': series_code,
+                    'lang': 'en',
+                    'format': 'json',
+                    'limit': 3
+                }
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, params=params) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            
+                            # Process BOJ data format
+                            latest = data['observations'][0]
+                            previous = data['observations'][1] if len(data['observations']) > 1 else None
+                            
+                            trend = 'neutral'
+                            if previous:
+                                current_val = float(latest['value'])
+                                prev_val = float(previous['value'])
+                                trend = 'up' if current_val > prev_val else 'down'
+                            
+                            boj_data[indicator_id] = {
+                                'name': indicator_id.replace('_', ' ').title(),
+                                'value': latest['value'],
+                                'date': latest['date'],
+                                'category': 'central_banks',
+                                'trend': trend,
+                                'historical_data': [
+                                    {'value': obs['value'], 'date': obs['date']}
+                                    for obs in data['observations'][:3]
+                                ]
+                            }
+                            
+                            logger.info(f"Fetched BOJ {indicator_id}: {boj_data[indicator_id]}")
+            
+            return boj_data
+            
+        except Exception as e:
+            logger.error(f"Error fetching BOJ data: {e}")
+            return {}
+
+    async def fetch_eia_data(self) -> Dict:
+        """Fetch EIA oil inventory and production data"""
+        try:
+            eia_data = {}
+            
+            for indicator_id, series_id in self.eia_series.items():
+                url = f"{self.eia_api_url}/series/{series_id}/data/"
+                params = {
+                    'api_key': self.eia_api_key,
+                    'frequency': 'weekly',
+                    'data[0]': 'value',
+                    'data[1]': 'period',
+                    'sort[0][column]': 'period',
+                    'sort[0][direction]': 'desc',
+                    'length': 3  # Get last 3 data points
+                }
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, params=params) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            
+                            # Process EIA data format
+                            series_data = data['response']['data']
+                            if not series_data:
+                                continue
+                                
+                            latest = series_data[0]
+                            previous = series_data[1] if len(series_data) > 1 else None
+                            
+                            trend = 'neutral'
+                            if previous:
+                                current_val = float(latest['value'])
+                                prev_val = float(previous['value'])
+                                trend = 'up' if current_val > prev_val else 'down'
+                            
+                            eia_data[indicator_id] = {
+                                'name': indicator_id.replace('_', ' ').title(),
+                                'value': str(latest['value']),
+                                'date': latest['period'],
+                                'category': 'energy_markets',
+                                'trend': trend,
+                                'historical_data': [
+                                    {'value': str(point['value']), 'date': point['period']}
+                                    for point in series_data[:3]
+                                ]
+                            }
+                            
+                            logger.info(f"Fetched EIA {indicator_id}: {eia_data[indicator_id]}")
+                        else:
+                            logger.error(f"Error fetching {indicator_id}: {response.status}")
+            
+            return eia_data
+            
+        except Exception as e:
+            logger.error(f"Error fetching EIA data: {e}")
+            return {}
+
+    async def get_commodity_data(self):
+        """Get commodity-specific data with additional sources"""
+        try:
+            # Get FRED data first
+            indicators = await self.get_economic_indicators()
+            
+            # Add BOJ data
+            boj_data = await self.fetch_boj_data()
+            indicators.update(boj_data)
+            
+            # Add EIA data
+            eia_data = await self.fetch_eia_data()
+            indicators.update(eia_data)
+            
+            # Add calculated real rates
+            if 'fed_rate' in indicators and 'cpi' in indicators:
+                fed_rate = float(indicators['fed_rate']['value'])
+                cpi = float(indicators['cpi']['value'])
+                real_rate = fed_rate - cpi
+                
+                indicators['real_fed_rate'] = {
+                    'name': 'Real Fed Rate',
+                    'value': f"{real_rate:.2f}",
+                    'trend': 'up' if real_rate > 0 else 'down',
+                    'category': 'real_rates',
+                    'date': indicators['fed_rate']['date']
+                }
+
+            return indicators
+
+        except Exception as e:
+            logger.error(f"Error fetching commodity data: {e}")
+            raise 
