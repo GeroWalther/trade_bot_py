@@ -47,7 +47,7 @@ class MarketIntelligenceService:
             logger.error("FRED API key not found")
             raise ValueError("FRED API key is required")
         
-        # Core indicators (7 that we know work)
+        # Core indicators
         self.series_ids = {
             'cpi': 'CPIAUCSL',            # CPI
             'core_cpi': 'CPILFESL',       # Core CPI
@@ -69,25 +69,45 @@ class MarketIntelligenceService:
             'RRPONTSYD': 'pc1',     # Percent change
         }
 
+        # Asset-specific indicators
+        self.asset_specific_indicators = {
+            'precious_metals': {
+                'real_interest': {
+                    'name': 'Real Interest Rate',
+                    'series': ['DGS10', 'CPIAUCSL'],  # Treasury - Inflation
+                    'description': 'Real Interest Rate (10Y - CPI)'
+                },
+                'dollar_index': 'DTWEXBGS',           # Dollar Index
+                'inflation_5y': 'T5YIE',              # 5Y Inflation Expectations
+                'inflation_10y': 'T10YIE',            # 10Y Inflation Expectations
+                'money_supply': 'M2SL'                # M2 Money Supply
+            },
+            'oil': {
+                'inventories': 'WCESTUS1',            # Oil Inventories
+                'industrial_prod': 'INDPRO',          # Industrial Production
+                'gdp_growth': 'GDPC1',               # GDP Growth
+                'dollar_strength': 'DTWEXBGS'         # Dollar Index
+            },
+            'forex': {
+                'fed_rate': 'DFF',                    # Fed Funds Rate
+                'japan_rate': 'IR3TIB01JPM156N',      # Japan Interest Rate
+                'ecb_rate': 'ECBDFR',                 # ECB Rate
+                'trade_balance': 'BOPGSTB',           # Trade Balance
+                'pmi_us': 'NAPM',                     # US PMI
+                'current_account': 'BOPBCA'           # Current Account Balance
+            },
+            'stocks': {
+                'earnings': 'EPSI',                   # Corporate Earnings
+                'yield_curve': 'T10Y2Y',              # Yield Curve
+                'consumer_spending': 'PCE'             # Consumer Spending
+            }
+        }
+
         # Initialize cache
         self.cache = {
             'data': None,
             'timestamp': None,
             'expiry': 3600  # Cache expires after 1 hour
-        }
-
-        # Asset-specific indicators
-        self.asset_specific_indicators = {
-            'forex': {
-                'euro_sentiment': 'EUSSI',      # Euro Area Sentiment
-                'uk_rate': 'BOERUKM',          # UK Interest Rate
-                'swiss_rate': 'SNBCHM',        # Swiss Interest Rate
-                'us_rate': 'DFF'               # US Federal Funds Rate
-            },
-            'commodities': {
-                'oil_supply': 'WCESTUS1',      # US Oil Supply
-                'gold_demand': 'GOLDAMGBD228NLBM'  # Gold Fixing Price
-            }
         }
 
         logger.info("Market Intelligence Service initialized successfully")
@@ -128,11 +148,6 @@ class MarketIntelligenceService:
             # Check cache first
             if self.cache['data'] and self.cache['timestamp']:
                 if (datetime.now() - self.cache['timestamp']).seconds < self.cache['expiry']:
-                    if core_only:
-                        return {k: v for k, v in self.cache['data'].items() if k in self.series_ids}
-                    if asset_type:
-                        return {k: v for k, v in self.cache['data'].items() 
-                                if k in self.asset_specific_indicators.get(asset_type, [])}
                     return self.cache['data']
 
             # If not in cache, fetch fresh data
@@ -141,20 +156,21 @@ class MarketIntelligenceService:
             
             indicators = {}
             
-            # Always fetch core indicators
-            if core_only or not asset_type:
-                for series_id, fred_id in self.series_ids.items():
-                    data = await self._fetch_fred_data(fred_id, start_date, end_date)
-                    if data:
-                        indicators[series_id] = self._process_indicator_data(data, series_id)
+            # Fetch core indicators
+            for series_id, fred_id in self.series_ids.items():
+                data = await self._fetch_fred_data(fred_id, start_date, end_date)
+                if data:
+                    indicators[series_id] = self._process_indicator_data(data, series_id, 'core')
 
-            # Fetch asset-specific indicators if requested
-            if asset_type and not core_only:
-                asset_indicators = self.asset_specific_indicators.get(asset_type, {})
+            # Fetch all asset-specific indicators
+            for category, asset_indicators in self.asset_specific_indicators.items():
                 for indicator_id, fred_id in asset_indicators.items():
+                    if isinstance(fred_id, dict):  # Handle composite indicators
+                        # TODO: Implement composite indicator processing
+                        continue
                     data = await self._fetch_fred_data(fred_id, start_date, end_date)
                     if data:
-                        indicators[indicator_id] = self._process_indicator_data(data, indicator_id)
+                        indicators[indicator_id] = self._process_indicator_data(data, indicator_id, category)
 
             # Update cache
             self.cache['data'] = indicators
@@ -526,7 +542,7 @@ class MarketIntelligenceService:
             }
         }
 
-    def _process_indicator_data(self, data: Dict, indicator_id: str) -> Dict:
+    def _process_indicator_data(self, data: Dict, indicator_id: str, category: str = None) -> Dict:
         """Process raw FRED data into formatted indicator data"""
         try:
             if not data or not data.get('observations'):
@@ -608,7 +624,8 @@ class MarketIntelligenceService:
                 'importance': metadata['importance'],
                 'correlation': metadata['correlation'],
                 'latest_release': data['observations'][0]['date'],
-                'historical_data': historical_data
+                'historical_data': historical_data,
+                'category': category
             }
 
         except Exception as e:

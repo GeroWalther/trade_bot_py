@@ -7,6 +7,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 market_bp = Blueprint('market_intelligence', __name__)
+
+# Initialize service at module level
 market_service = MarketIntelligenceService()
 
 @market_bp.route('/api/market-intelligence')
@@ -30,12 +32,8 @@ async def get_economic_indicators():
         
         logger.info(f"Fetching indicators - asset_type: {asset_type}, core_only: {core_only}")
         
-        # Initialize service if not already done
-        if not hasattr(market_bp, 'market_intelligence'):
-            market_bp.market_intelligence = MarketIntelligenceService()
-        
-        # Get indicators
-        indicators = await market_bp.market_intelligence.get_economic_indicators(
+        # Get indicators using the module-level service
+        indicators = await market_service.get_economic_indicators(
             asset_type=asset_type if not core_only else None,
             core_only=core_only
         )
