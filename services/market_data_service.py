@@ -22,8 +22,9 @@ class MarketDataService:
         
         logger.info(f"Initialized OANDA client with account {self.account_id}")
         
-        # Only forex pairs that we know work with your account
+        # Complete symbol mapping for all asset types
         self.symbol_map = {
+            # Forex
             'EUR_USD': 'EUR_USD',
             'GBP_USD': 'GBP_USD',
             'USD_JPY': 'USD_JPY',
@@ -33,8 +34,31 @@ class MarketDataService:
             'NZD_USD': 'NZD_USD',
             'EUR_GBP': 'EUR_GBP',
             'EUR_JPY': 'EUR_JPY',
-            'GBP_JPY': 'GBP_JPY'
+            'GBP_JPY': 'GBP_JPY',
+            
+            # Indices
+            'SPX500_USD': 'SPX500_USD',  # S&P 500
+            'NAS100_USD': 'NAS100_USD',  # NASDAQ
+            'JP225_USD': 'JP225_USD',    # Nikkei
+            'UK100_GBP': 'UK100_GBP',    # FTSE
+            'DE30_EUR': 'DE30_EUR',      # DAX
+            'EU50_EUR': 'EU50_EUR',      # Euro Stoxx 50
+            
+            # Commodities
+            'XAU_USD': 'XAU_USD',        # Gold
+            'XAG_USD': 'XAG_USD',        # Silver
+            'BCO_USD': 'BCO_USD',        # Brent Crude Oil
+            'WTICO_USD': 'WTICO_USD',    # WTI Crude Oil
+            'NATGAS_USD': 'NATGAS_USD',  # Natural Gas
+            
+            # Crypto (if available on your OANDA account)
+            'BTC_USD': 'BTC_USD',
+            'ETH_USD': 'ETH_USD',
+            'LTC_USD': 'LTC_USD'
         }
+
+        # Log available instruments
+        logger.info(f"Available trading instruments: {list(self.symbol_map.keys())}")
 
     async def get_historical_prices(self, symbol: str) -> List[Dict]:
         """Get historical price data for a symbol"""
@@ -49,7 +73,7 @@ class MarketDataService:
             # Get symbol mapping
             oanda_symbol = self.symbol_map.get(symbol)
             if not oanda_symbol:
-                logger.error(f"No symbol mapping for {symbol}")
+                logger.error(f"Unsupported symbol: {symbol}")
                 return []
 
             try:
@@ -64,9 +88,17 @@ class MarketDataService:
                     params=params
                 )
                 
-                logger.info(f"Fetching OANDA data for {symbol}")
+                logger.info(f"Fetching OANDA data for {symbol} ({oanda_symbol})")
                 response = await asyncio.to_thread(self.oanda.request, request)
                 
+                if 'errorMessage' in response:
+                    logger.error(f"OANDA error for {symbol}: {response['errorMessage']}")
+                    if 'Invalid instrument' in response.get('errorMessage', ''):
+                        # Remove invalid instrument from map
+                        del self.symbol_map[symbol]
+                        logger.warning(f"Removed invalid instrument {symbol} from symbol map")
+                    return []
+
                 # Debug the raw response
                 logger.info(f"Raw OANDA response for {symbol}: {response}")
                 
@@ -106,7 +138,7 @@ class MarketDataService:
                     return []
 
             except Exception as e:
-                logger.error(f"OANDA error for {symbol}: {e}")
+                logger.error(f"OANDA error for {symbol} ({oanda_symbol}): {e}")
                 return []
 
         except Exception as e:
