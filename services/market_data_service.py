@@ -60,35 +60,54 @@ class MarketDataService:
         # Log available instruments
         logger.info(f"Available trading instruments: {list(self.symbol_map.keys())}")
 
-    async def get_historical_prices(self, symbol: str) -> List[Dict]:
-        """Get historical price data for a symbol"""
+        # Define timeframe configurations
+        self.timeframe_config = {
+            'Intraday': {
+                'count': 24,
+                'granularity': 'M15'  # 15-minute candles
+            },
+            'Swing': {
+                'count': 120,
+                'granularity': 'H1'   # 1-hour candles
+            },
+            'Position': {
+                'count': 100,
+                'granularity': 'D'    # Daily candles
+            }
+        }
+
+    async def get_historical_prices(self, symbol: str, timeframe: str = 'Intraday') -> List[Dict]:
+        """Get historical price data for a symbol with specified timeframe"""
         try:
-            # Check cache first
-            cache_key = f"historical_prices_{symbol}"
+            # Include timeframe in cache key
+            cache_key = f"historical_prices_{symbol}_{timeframe}"
             cached_data = self.cache.get(cache_key)
             if cached_data:
-                logger.info(f"Using cached data for {symbol}")
+                logger.info(f"Using cached data for {symbol} ({timeframe})")
                 return cached_data
 
-            # Get symbol mapping
             oanda_symbol = self.symbol_map.get(symbol)
             if not oanda_symbol:
                 logger.error(f"Unsupported symbol: {symbol}")
                 return []
 
             try:
+                # Get timeframe configuration
+                tf_config = self.timeframe_config.get(timeframe, self.timeframe_config['Intraday'])
+                
                 params = {
-                    "count": 24,      # Last 24 hours
-                    "granularity": "H1",  # 1 hour candles
-                    "price": "M"      # Midpoint prices
+                    "count": tf_config['count'],
+                    "granularity": tf_config['granularity'],
+                    "price": "M"
                 }
+                
+                logger.info(f"Fetching {timeframe} data for {symbol} with {tf_config['granularity']} candles")
                 
                 request = InstrumentsCandles(
                     instrument=oanda_symbol,
                     params=params
                 )
                 
-                logger.info(f"Fetching OANDA data for {symbol} ({oanda_symbol})")
                 response = await asyncio.to_thread(self.oanda.request, request)
                 
                 if 'errorMessage' in response:

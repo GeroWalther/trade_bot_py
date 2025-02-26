@@ -81,9 +81,11 @@ async def clear_cache():
 @rate_limit(requests_per_minute=30)
 async def get_historical_prices(symbol):
     try:
-        logger.info(f"Price request received for {symbol}")
-        prices = await market_data_service.get_historical_prices(symbol)
-        logger.info(f"Returning {len(prices)} prices for {symbol}")
+        # Get timeframe from query parameters, default to Intraday
+        timeframe = request.args.get('timeframe', 'Intraday')
+        logger.info(f"Price request for {symbol} with {timeframe} timeframe")
+        
+        prices = await market_data_service.get_historical_prices(symbol, timeframe)
         return jsonify(prices)
     except Exception as e:
         logger.error(f"Error in route: {e}")
