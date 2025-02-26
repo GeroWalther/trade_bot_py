@@ -1,7 +1,11 @@
 from quart import Blueprint, jsonify, request
 from services.market_intelligence_service import MarketIntelligenceService
+from services.market_data_service import MarketDataService
 import os
 import logging
+from functools import wraps
+import time
+from collections import defaultdict
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -10,6 +14,33 @@ market_bp = Blueprint('market_intelligence', __name__)
 
 # Initialize service at module level
 market_service = MarketIntelligenceService()
+market_data_service = MarketDataService(alpha_vantage_key=os.getenv('ALPHA_VANTAGE_API_KEY'))
+
+# Simple rate limiting
+request_counts = defaultdict(lambda: {'count': 0, 'reset_time': 0})
+
+def rate_limit(requests_per_minute=30):
+    def decorator(f):
+        @wraps(f)
+        async def wrapped(*args, **kwargs):
+            now = time.time()
+            key = f.__name__
+            
+            # Reset counter if minute has passed
+            if now > request_counts[key]['reset_time']:
+                request_counts[key] = {
+                    'count': 0,
+                    'reset_time': now + 60
+                }
+            
+            # Check rate limit
+            if request_counts[key]['count'] >= requests_per_minute:
+                return jsonify({'error': 'Rate limit exceeded'}), 429
+                
+            request_counts[key]['count'] += 1
+            return await f(*args, **kwargs)
+        return wrapped
+    return decorator
 
 @market_bp.route('/api/market-intelligence')
 async def get_market_intelligence():
@@ -44,4 +75,16 @@ async def clear_cache():
             return {'error': 'Failed to clear cache'}, 500
     except Exception as e:
         logger.error(f"Error clearing cache: {e}")
-        return {'error': str(e)}, 500 
+        return {'error': str(e)}, 500
+
+@market_bp.route('/api/historical-prices/<symbol>')
+@rate_limit(requests_per_minute=30)
+async def get_historical_prices(symbol):
+    try:
+        logger.info(f"Price request received for {symbol}")
+        prices = await market_data_service.get_historical_prices(symbol)
+        logger.info(f"Returning {len(prices)} prices for {symbol}")
+        return jsonify(prices)
+    except Exception as e:
+        logger.error(f"Error in route: {e}")
+        return jsonify([]) 

@@ -19,6 +19,7 @@ from functools import wraps
 import time
 from dotenv import load_dotenv
 import json
+from services.cache_service import Cache
 
 # Force reload of environment variables
 load_dotenv(override=True)
@@ -66,17 +67,33 @@ class MarketIntelligenceService:
         # Initialize indicators cache
         self.indicators_cache = {}
         
-        # Initialize cache for all data sources
-        self.cache = {
-            'fred': {'data': None, 'timestamp': None},
-            'boe': {'data': None, 'timestamp': None},
-            'boj': {'data': None, 'timestamp': None},
-            'eia': {'data': None, 'timestamp': None},
-            'last_cleared': datetime.now()
+        # Initialize cache with much longer expiry (4 hours)
+        self.cache = Cache(expiry_minutes=240)  # Default 4 hour cache for all market data
+
+        # ONLY WORKING FRED SERIES
+        self.series_ids = {
+            'gdp': 'GDP',                    # Gross Domestic Product
+            'unemployment': 'UNRATE',         # Unemployment Rate
+            'cpi': 'CPIAUCSL',               # Consumer Price Index
+            'core_cpi': 'CPILFESL',          # Core CPI
+            'fed_rate': 'FEDFUNDS',          # Federal Funds Rate
+            'treasury_10y': 'GS10',          # 10-Year Treasury Rate
+            'treasury_2y': 'GS2',            # 2-Year Treasury Rate
+            'industrial_prod': 'INDPRO',      # Industrial Production
+            'retail_sales': 'RSAFS',         # Retail Sales
+            'nfp': 'PAYEMS',                 # Non-Farm Payroll
+            'money_supply': 'M2SL'           # M2 Money Stock
         }
 
-        # Try to load persisted cache
-        self._load_cache()
+        # Categories for working indicators
+        self.indicator_categories = {
+            'economic': ['gdp', 'unemployment', 'cpi', 'core_cpi', 'industrial_prod', 'retail_sales', 'nfp'],
+            'monetary': ['fed_rate', 'treasury_2y', 'treasury_10y', 'money_supply'],
+        }
+
+        # Remove any non-existent series
+        self.series_ids = {k: v for k, v in self.series_ids.items() 
+                          if v is not None and v.strip()}
 
         # Update series IDs with correct ones
         self.series_ids = {
@@ -235,25 +252,25 @@ class MarketIntelligenceService:
             'fed_rate': {
                 'name': 'Federal Reserve Rate',
                 'description': 'US Federal Funds Rate',
-                'importance': 98,
+                    'importance': 98,
                 'correlation': 95
             },
             'ecb_rate': {
                 'name': 'ECB Rate',
                 'description': 'European Central Bank Deposit Rate',
-                'importance': 95,
+                    'importance': 95,
                 'correlation': 90
             },
             'crude_inventories': {
                 'name': 'US Crude Inventories',
                 'description': 'Weekly US commercial crude oil inventories',
-                'importance': 92,
+                    'importance': 92,
                 'correlation': 85
             },
             'gold_price': {
                 'name': 'Gold Price',
                 'description': 'London Gold Fixing Price USD/oz',
-                'importance': 95,
+                    'importance': 95,
                 'correlation': 88
             },
             'real_rate_10y': {
@@ -265,7 +282,7 @@ class MarketIntelligenceService:
             'dxy_index': {
                 'name': 'Dollar Index',
                 'description': 'Trade Weighted US Dollar Index',
-                'importance': 96,
+                    'importance': 96,
                 'correlation': 92
             }
         }
@@ -417,22 +434,32 @@ class MarketIntelligenceService:
         except Exception as e:
             logger.error(f"Error loading cache: {e}")
 
-    async def _fetch_fred_data(self, series_id: str) -> Optional[Dict]:
-        """Simple FRED API fetch"""
+    async def get_fred_data(self, series_id: str) -> Dict:
+        """Get data from FRED with better error handling"""
         try:
+            cache_key = f"fred_{series_id}"
+            cached_data = self.cache.get(cache_key)
+            if cached_data:
+                return cached_data
+
             url = f"{self.base_url}/observations"
             params = {
                 'series_id': series_id,
                 'api_key': self.fred_api_key,
                 'file_type': 'json',
                 'sort_order': 'desc',
-                'limit': 3  # Changed from 1 to 3 to get last 3 observations
+                'limit': 3
             }
-            
+
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, params=params) as response:
-                    response.raise_for_status()
-                    return await response.json()
+                    if response.status == 200:
+                        data = await response.json()
+                        self.cache.set(cache_key, data)
+                        return data
+                    else:
+                        logger.error(f"FRED API error for {series_id}: {response.status}")
+                        return None
 
         except Exception as e:
             logger.error(f"Error fetching FRED data for {series_id}: {e}")
@@ -446,7 +473,7 @@ class MarketIntelligenceService:
             # Fetch FRED data
             for indicator_id, series_id in self.series_ids.items():
                 try:
-                    data = await self._fetch_fred_data(series_id)
+                    data = await self.get_fred_data(series_id)
                     if data and data.get('observations'):
                         latest = data['observations'][0]
                         previous = data['observations'][1] if len(data['observations']) > 1 else None

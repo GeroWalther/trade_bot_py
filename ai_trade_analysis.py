@@ -9,6 +9,7 @@ import logging
 import os
 from datetime import datetime
 from fastapi import HTTPException
+from quart_cors import cors
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -37,6 +38,8 @@ def create_app():
     # Register blueprints
     app.register_blueprint(analysis_bp)
     app.register_blueprint(market_bp)
+    
+    app = cors(app, allow_origin="*")  # Enable CORS
     
     return app
 
