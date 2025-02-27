@@ -4,6 +4,7 @@ from routes.trading_routes import trading_bp
 from config import validate_api_keys
 import logging
 from routes.analysis_routes import analysis_bp
+from routes.ai_analysis_routes import ai_analysis_bp
 
 # Configure logging
 logging.basicConfig(
@@ -23,6 +24,7 @@ def create_app():
     # Register trading routes
     app.register_blueprint(trading_bp)
     app.register_blueprint(analysis_bp)
+    app.register_blueprint(ai_analysis_bp)
     
     @app.before_serving
     async def startup():

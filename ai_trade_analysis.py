@@ -2,6 +2,7 @@
 from quart import Quart, jsonify, request
 from routes.analysis_routes import analysis_bp
 from routes.market_intelligence import market_bp
+from routes.ai_analysis_routes import ai_analysis_bp
 from services.ai_analysis_service_new import AIAnalysisService
 from services.market_data_service import MarketDataService
 from services.market_analyzer import MarketAnalyzer
@@ -38,6 +39,7 @@ def create_app():
     # Register blueprints
     app.register_blueprint(analysis_bp)
     app.register_blueprint(market_bp)
+    app.register_blueprint(ai_analysis_bp)
     
     app = cors(app, allow_origin="*")  # Enable CORS
     
@@ -71,15 +73,5 @@ async def get_news(symbol):
         })
 
 if __name__ == '__main__':
-    port = int(os.getenv('PORT', 5003))
-    debug = os.getenv('FLASK_ENV') == 'development'
-    
-    if debug:
-        logger.setLevel(logging.DEBUG)
-        logger.info("Running in development mode")
-    
-    app.run(
-        host='0.0.0.0', 
-        port=port,
-        debug=debug
-    ) 
+    logger.info("Starting AI Analysis server on port 5003...")
+    app.run(host='0.0.0.0', port=5003, debug=True) 
