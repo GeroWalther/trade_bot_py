@@ -19,9 +19,11 @@ class AIAnalysisService:
         self.client = API(access_token=self.oanda_access_token)
         logger.info("AI Analysis Service initialized successfully")
 
-    async def get_technical_analysis(self, symbol: str) -> Dict:
+    async def get_technical_analysis(self, symbol: str, timeframe: str = 'SWING') -> Dict:
         """Get technical indicators using OANDA data"""
         try:
+            logger.info(f"Starting technical analysis for {symbol} with timeframe {timeframe}")
+            
             # Format symbol for OANDA based on asset type
             if symbol.startswith('XAU'):  # Gold
                 formatted_symbol = 'XAU_USD'
@@ -53,18 +55,38 @@ class AIAnalysisService:
             if formatted_symbol not in SUPPORTED_INSTRUMENTS:
                 raise ValueError(f"Unsupported trading instrument: {symbol}")
             
-            logger.info(f"Getting candles for {formatted_symbol}")
+            # Map timeframe to appropriate granularity
+            timeframe_config = {
+                'INTRADAY': {
+                    'granularity': 'M15',
+                    'count': 100
+                },
+                'SWING': {
+                    'granularity': 'H1',
+                    'count': 100
+                },
+                'POSITION': {
+                    'granularity': 'D',
+                    'count': 100
+                }
+            }
+
+            # Get configuration for requested timeframe
+            config = timeframe_config.get(timeframe.upper(), timeframe_config['SWING'])
+            logger.info(f"Timeframe '{timeframe}' mapped to config: {config}")
             
             # Get candles from OANDA with appropriate granularity
             params = {
-                "count": 100,
-                "granularity": "H1",  # Could be configurable based on asset
-                "price": "M"  # "M" for midpoint
+                "count": config['count'],
+                "granularity": config['granularity'],
+                "price": "M"
             }
+            logger.info(f"Making OANDA request with params: {params}")
             
             try:
                 r = instruments.InstrumentsCandles(instrument=formatted_symbol, params=params)
-                self.client.request(r)
+                response = self.client.request(r)
+                logger.info(f"OANDA response received with {len(response.get('candles', []))} candles")
             except Exception as e:
                 logger.error(f"OANDA API error for {formatted_symbol}: {e}")
                 raise ValueError(f"Invalid or unsupported symbol: {symbol}")
@@ -78,7 +100,7 @@ class AIAnalysisService:
                     'low': float(c['mid']['l']),
                     'close': float(c['mid']['c']),
                     'volume': int(c['volume'])
-                } for c in r.response['candles']
+                } for c in response['candles']
             ])
             
             if len(candles) == 0:

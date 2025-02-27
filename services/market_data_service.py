@@ -60,14 +60,14 @@ class MarketDataService:
         # Log available instruments
         logger.info(f"Available trading instruments: {list(self.symbol_map.keys())}")
 
-        # Define timeframe configurations
+        # Update timeframe configurations
         self.timeframe_config = {
             'Intraday': {
-                'count': 24,
+                'count': 100,
                 'granularity': 'M15'  # 15-minute candles
             },
             'Swing': {
-                'count': 120,
+                'count': 100,
                 'granularity': 'H1'   # 1-hour candles
             },
             'Position': {
