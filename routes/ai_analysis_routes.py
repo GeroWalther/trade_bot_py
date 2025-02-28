@@ -286,22 +286,39 @@ async def advanced_market_analysis():
         You are an expert financial analyst and trader with deep knowledge of markets, technical analysis, and trading strategies.
         Your task is to analyze the requested asset and provide a comprehensive trading strategy.
         
-        You have the ability to search the web for current market data if needed. For Nasdaq data, you can check https://finance.yahoo.com/quote/%5EIXIC/
+        IMPORTANT: You should actively search for current information about the requested asset, including:
         
-        You should:
-        1. Research and analyze the current market conditions for the asset
-        2. Consider relevant news, Twitter/social media sentiment, historical price data, technical indicators, and macroeconomic factors
-        3. Provide a detailed analysis with clear trading recommendations
-        4. Format your response as a JSON object with the following structure:
+        1. CURRENT MARKET DATA:
+           - Look up the latest price data on Yahoo Finance (e.g., https://finance.yahoo.com/quote/%5EIXIC/ for Nasdaq)
+           - Find current price, volume, and basic indicators
+        
+        2. TECHNICAL ANALYSIS:
+           - Check TradingView (e.g., https://www.tradingview.com/symbols/NASDAQ-IXIC/technicals/ for Nasdaq)
+           - Research current RSI, MACD, Moving Averages, and support/resistance levels
+        
+        3. RECENT NEWS:
+           - Search for latest news about the asset on financial news sites
+           - Look for news from the past 7 days that could impact the asset
+        
+        4. MACROECONOMIC DATA:
+           - Check for recent economic data releases
+           - Research Fed announcements, inflation data, employment reports, etc.
+        
+        5. MARKET SENTIMENT:
+           - Look for recent analyst opinions and market sentiment
+           - Check Twitter/X for market commentary from respected analysts
+        
+        After gathering this information, analyze it and provide a comprehensive trading strategy.
+        Format your response as a JSON object with the following structure:
         
         {
-            "market_summary": "Comprehensive summary of current market conditions",
-            "key_drivers": ["List of key market drivers and factors"],
-            "technical_analysis": "Detailed technical analysis with key indicators",
-            "risk_assessment": "Assessment of market risks",
+            "market_summary": "Comprehensive summary of current market conditions based on your research",
+            "key_drivers": ["List of key market drivers and factors from your research"],
+            "technical_analysis": "Detailed technical analysis with key indicators you found",
+            "risk_assessment": "Assessment of market risks based on current data",
             "trading_strategy": {
                 "direction": "LONG or SHORT",
-                "rationale": "Explanation of the strategy direction",
+                "rationale": "Explanation of the strategy direction based on your research",
                 "entry": {
                     "price": "Recommended entry price or range",
                     "rationale": "Rationale for entry point"
@@ -323,7 +340,11 @@ async def advanced_market_analysis():
         
         Your response MUST be a valid JSON object with this exact structure.
         
-        IMPORTANT: Make sure your price targets are realistic and close to the current market price. For swing trades, entry points should typically be within 5% of the current price, not requiring massive market moves to trigger.
+        IMPORTANT: 
+        - Make sure your price targets are realistic and close to the current market price. For swing trades, entry points should typically be within 5% of the current price.
+        - Include specific data points and findings from your research in your analysis.
+        - Cite specific news events, economic data, or technical indicators that inform your strategy.
+        - If the current price is provided in the user message, use it as a reference but still verify it with your own research.
         """
 
         # Prepare user message with real-time market data
@@ -354,33 +375,50 @@ async def advanced_market_analysis():
         
         {current_price_info}
         
-        I need a comprehensive analysis that includes:
-        - Current market conditions and sentiment
-        - Technical analysis with key indicators
-        - Relevant news and social media sentiment
-        - Macroeconomic factors affecting the asset
-        - A detailed trading strategy with entry, stop loss, and take profit levels
+        I need you to search for and provide a comprehensive analysis that includes:
         
-        If you need current market data, you can search for it at https://finance.yahoo.com/quote/%5EIXIC/ for Nasdaq.
+        1. CURRENT MARKET CONDITIONS:
+           - Look up the latest price data and verify the current price
+           - Compare current price to recent trends
         
-        IMPORTANT: Make sure your price targets are realistic and close to the current market price. For swing trades, entry points should typically be within 5% of the current price, not requiring massive market moves to trigger.
+        2. TECHNICAL ANALYSIS:
+           - Research current technical indicators
+           - Identify key support/resistance levels
+           - Analyze momentum indicators (RSI, MACD, etc.)
+        
+        3. RECENT NEWS AND EVENTS:
+           - Find and analyze news from the past week that impacts {asset}
+           - Look for earnings reports, sector news, or market-moving events
+        
+        4. MACROECONOMIC FACTORS:
+           - Check recent economic data releases
+           - Consider how current Fed policy affects {asset}
+           - Look for upcoming economic events that might impact the market
+        
+        5. MARKET SENTIMENT:
+           - Research current analyst opinions
+           - Look for institutional positioning data if available
+        
+        Based on this research, develop a detailed trading strategy with specific entry, stop-loss, and take-profit levels.
+        
+        IMPORTANT: Make sure your price targets are realistic and close to the current market price. For swing trades, entry points should typically be within 5% of the current price.
         
         Please format your response as a JSON object as specified in your instructions.
         """
 
         try:
-            # Call OpenAI API
+            # Call OpenAI API with web browsing capability
             logger.info("Sending request to OpenAI API...")
             response = openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4o",  # Use GPT-4o for advanced analysis capabilities
                 response_format={"type": "json_object"},
                 messages=[
                     {"role": "system", "content": system_message},
                     {"role": "user", "content": user_message}
                 ],
                 temperature=0.2,
-                max_tokens=1000,
-                timeout=25
+                max_tokens=1500,
+                timeout=45  # Increased timeout for web browsing
             )
 
             logger.info("Received response from ChatGPT")
@@ -393,6 +431,13 @@ async def advanced_market_analysis():
                 # Add current market price to the response
                 if market_data and market_data.get('current_price'):
                     analysis_json['current_market_price'] = market_data['current_price']
+                
+                # Add metadata about the analysis
+                analysis_json['meta'] = {
+                    'generated_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+                    'model': 'gpt-4o',
+                    'note': 'This analysis includes information the model has searched for about current market conditions, technical indicators, recent news, and market sentiment.'
+                }
                 
                 return jsonify({
                     'status': 'success',
