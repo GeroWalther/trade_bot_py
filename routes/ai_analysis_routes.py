@@ -8,6 +8,7 @@ import openai
 import json
 import aiohttp
 import asyncio
+import time
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -32,16 +33,82 @@ else:
     except Exception as e:
         logger.error(f"Failed to initialize OpenAI client: {str(e)}")
 
+# Simple cache for market data
+market_data_cache = {}
+CACHE_EXPIRY = 60  # Cache expiry in seconds
+
 # Function to fetch real-time market data from Yahoo Finance
 async def fetch_market_data(symbol):
+    # Check cache first
+    current_time = time.time()
+    cache_key = symbol.lower()
+    
+    if cache_key in market_data_cache:
+        cache_entry = market_data_cache[cache_key]
+        # If cache is still valid (less than CACHE_EXPIRY seconds old)
+        if current_time - cache_entry['timestamp'] < CACHE_EXPIRY:
+            logger.info(f"Using cached market data for {symbol}, age: {current_time - cache_entry['timestamp']:.1f} seconds")
+            return cache_entry['data']
+        else:
+            logger.info(f"Cache expired for {symbol}, fetching fresh data")
+    
     try:
         # For Nasdaq, we use the ^IXIC symbol
-        yahoo_symbol = "%5EIXIC" if symbol == "Nasdaq" else symbol
+        if symbol.lower() == "nasdaq":
+            primary_symbol = "%5EIXIC"  # URL encoded ^IXIC
+            fallback_symbol = "QQQ"     # QQQ ETF as fallback
+            logger.info(f"Using Yahoo Finance symbol %5EIXIC for Nasdaq with QQQ as fallback")
+        else:
+            primary_symbol = symbol
+            fallback_symbol = None
+            
+        # Try primary symbol first
+        market_data = await _fetch_from_yahoo(primary_symbol)
+        
+        # If primary symbol fails and we have a fallback, try that
+        if market_data.get('error') and fallback_symbol:
+            logger.info(f"Primary symbol failed, trying fallback symbol: {fallback_symbol}")
+            market_data = await _fetch_from_yahoo(fallback_symbol)
+            
+            # If fallback succeeds, adjust the data to represent the original symbol
+            if not market_data.get('error'):
+                market_data['symbol'] = symbol
+                market_data['note'] = f"Data from related symbol: {fallback_symbol}"
+        
+        # Cache successful results
+        if not market_data.get('error'):
+            market_data_cache[cache_key] = {
+                'data': market_data,
+                'timestamp': current_time
+            }
+            
+        return market_data
+    except Exception as e:
+        logger.error(f"Error fetching market data: {str(e)}")
+        return {
+            'error': True,
+            'message': f"Error fetching market data: {str(e)}",
+            'status_code': 500
+        }
+
+async def _fetch_from_yahoo(yahoo_symbol):
+    """Helper function to fetch data from Yahoo Finance for a specific symbol"""
+    try:
+        logger.info(f"Fetching market data using Yahoo symbol: {yahoo_symbol}")
         
         async with aiohttp.ClientSession() as session:
-            async with session.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}", timeout=5) as response:
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}"
+            logger.info(f"Making request to: {url}")
+            
+            # Add a random delay between 0.5 and 1.5 seconds to avoid rate limiting
+            await asyncio.sleep(0.5 + (time.time() % 1))
+            
+            async with session.get(url, timeout=5, 
+                                  headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}) as response:
                 if response.status == 200:
                     data = await response.json()
+                    logger.info(f"Received response from Yahoo Finance")
+                    
                     if data.get('chart', {}).get('result'):
                         result = data['chart']['result'][0]
                         meta = result.get('meta', {})
@@ -52,6 +119,8 @@ async def fetch_market_data(symbol):
                         day_high = meta.get('dayHigh')
                         day_low = meta.get('dayLow')
                         
+                        logger.info(f"Current price for {yahoo_symbol}: {current_price}")
+                        
                         return {
                             'current_price': current_price,
                             'previous_close': previous_close,
@@ -60,12 +129,30 @@ async def fetch_market_data(symbol):
                             'symbol': meta.get('symbol'),
                             'exchange': meta.get('exchangeName')
                         }
-        
-        logger.error(f"Failed to fetch market data for {symbol}")
-        return None
+                    else:
+                        logger.error(f"No result data in Yahoo Finance response for {yahoo_symbol}")
+                        return {
+                            'error': True,
+                            'message': f"No data available for {yahoo_symbol}",
+                            'status_code': response.status
+                        }
+                else:
+                    error_msg = f"Yahoo Finance API returned status code {response.status}"
+                    if response.status == 429:
+                        error_msg = "Rate limit exceeded when accessing market data. Please try again later."
+                    logger.error(error_msg)
+                    return {
+                        'error': True,
+                        'message': error_msg,
+                        'status_code': response.status
+                    }
     except Exception as e:
-        logger.error(f"Error fetching market data: {str(e)}")
-        return None
+        logger.error(f"Error fetching from Yahoo for {yahoo_symbol}: {str(e)}")
+        return {
+            'error': True,
+            'message': f"Error fetching market data: {str(e)}",
+            'status_code': 500
+        }
 
 @ai_analysis_bp.route('/api/ai-analysis', methods=['POST'])
 async def analyze_market():
@@ -188,64 +275,30 @@ async def advanced_market_analysis():
         logger.info(f"Fetching current market data for {asset} from Yahoo Finance")
         market_data = await fetch_market_data(asset)
         
-        if not market_data or 'current_price' not in market_data:
-            logger.warning(f"Failed to fetch market data for {asset}, proceeding with limited data")
-            # Create a minimal market data object if fetch failed
-            market_data = {
-                'current_price': None,
-                'symbol': asset,
-                'exchange': 'Unknown'
-            }
-        else:
-            logger.info(f"Successfully fetched market data. Current price: {market_data['current_price']}")
+        # Check if there was an error fetching market data
+        if market_data.get('error'):
+            logger.error(f"Error fetching market data: {market_data.get('message')}")
+            return jsonify({
+                'status': 'error',
+                'message': market_data.get('message', 'Failed to fetch current market data')
+            }), market_data.get('status_code', 500)
+        
+        logger.info(f"Successfully fetched market data. Current price: {market_data['current_price']}")
         
         # Check if OpenAI client is initialized
         if not openai_client:
             logger.error("OpenAI client not initialized. Check your API key.")
-            
-            # For testing purposes, return a mock response instead of an error
-            # This allows frontend testing without a valid OpenAI API key
-            mock_data = {
-                "market_summary": "This is a mock response for testing purposes. The OpenAI API key is not configured correctly.",
-                "key_drivers": ["Mock driver 1", "Mock driver 2", "Mock driver 3"],
-                "technical_analysis": "Mock technical analysis for testing purposes.",
-                "risk_assessment": "Mock risk assessment for testing purposes.",
-                "trading_strategy": {
-                    "direction": "LONG",
-                    "rationale": "This is a mock strategy for testing purposes.",
-                    "entry": {
-                        "price": "14,500",
-                        "rationale": "Mock entry rationale"
-                    },
-                    "stop_loss": {
-                        "price": "14,000",
-                        "rationale": "Mock stop loss rationale"
-                    },
-                    "take_profit_1": {
-                        "price": "15,000",
-                        "rationale": "Mock TP1 rationale"
-                    },
-                    "take_profit_2": {
-                        "price": "15,500",
-                        "rationale": "Mock TP2 rationale"
-                    }
-                }
-            }
-            
-            # Add current market price to the mock response if available
-            if market_data and market_data.get('current_price'):
-                mock_data['current_market_price'] = market_data['current_price']
-            
             return jsonify({
-                'status': 'success',
-                'data': mock_data,
-                'mock': True
-            })
+                'status': 'error',
+                'message': 'AI service is not properly configured. Please check your API key.'
+            }), 500
 
         # Prepare system message for ChatGPT
         system_message = """
         You are an expert financial analyst and trader with deep knowledge of markets, technical analysis, and trading strategies.
         Your task is to analyze the requested asset and provide a comprehensive trading strategy.
+        
+        You have the ability to search the web for current market data if needed. For Nasdaq data, you can check https://finance.yahoo.com/quote/%5EIXIC/
         
         You should:
         1. Research and analyze the current market conditions for the asset
@@ -320,6 +373,8 @@ async def advanced_market_analysis():
         - Macroeconomic factors affecting the asset
         - A detailed trading strategy with entry, stop loss, and take profit levels
         
+        If you need current market data, you can search for it at https://finance.yahoo.com/quote/%5EIXIC/ for Nasdaq.
+        
         IMPORTANT: Make sure your price targets are realistic and close to the current market price. For swing trades, entry points should typically be within 5% of the current price, not requiring massive market moves to trigger.
         
         Please format your response as a JSON object as specified in your instructions.
@@ -366,80 +421,16 @@ async def advanced_market_analysis():
             logger.error(f"OpenAI API error: {str(e)}")
             logger.error(traceback.format_exc())
             
-            # For testing purposes, return a mock response instead of an error
-            mock_data = {
-                "market_summary": f"Mock response due to API error: {str(e)}",
-                "key_drivers": ["API Error", "Mock data for testing", "Check server logs"],
-                "technical_analysis": "Mock technical analysis for testing purposes.",
-                "risk_assessment": "Mock risk assessment for testing purposes.",
-                "trading_strategy": {
-                    "direction": "NEUTRAL",
-                    "rationale": "This is a mock strategy due to an API error.",
-                    "entry": {
-                        "price": "14,500",
-                        "rationale": "Mock entry rationale"
-                    },
-                    "stop_loss": {
-                        "price": "14,000",
-                        "rationale": "Mock stop loss rationale"
-                    },
-                    "take_profit_1": {
-                        "price": "15,000",
-                        "rationale": "Mock TP1 rationale"
-                    },
-                    "take_profit_2": {
-                        "price": "15,500",
-                        "rationale": "Mock TP2 rationale"
-                    }
-                }
-            }
-            
-            # Add current market price to the mock response if available
-            if market_data and market_data.get('current_price'):
-                mock_data['current_market_price'] = market_data['current_price']
-            
             return jsonify({
-                'status': 'success',
-                'data': mock_data,
-                'mock': True,
-                'error': str(e)
-            })
+                'status': 'error',
+                'message': f"AI analysis service error: {str(e)}"
+            }), 500
 
     except Exception as e:
         logger.error(f"Request processing error: {str(e)}")
         logger.error(traceback.format_exc())
         
-        # For testing purposes, return a mock response instead of an error
-        mock_data = {
-            "market_summary": f"Mock response due to processing error: {str(e)}",
-            "key_drivers": ["Processing Error", "Mock data for testing", "Check server logs"],
-            "technical_analysis": "Mock technical analysis for testing purposes.",
-            "risk_assessment": "Mock risk assessment for testing purposes.",
-            "trading_strategy": {
-                "direction": "NEUTRAL",
-                "rationale": "This is a mock strategy due to a processing error.",
-                "entry": {
-                    "price": "14,500",
-                    "rationale": "Mock entry rationale"
-                },
-                "stop_loss": {
-                    "price": "14,000",
-                    "rationale": "Mock stop loss rationale"
-                },
-                "take_profit_1": {
-                    "price": "15,000",
-                    "rationale": "Mock TP1 rationale"
-                },
-                "take_profit_2": {
-                    "price": "15,500",
-                    "rationale": "Mock TP2 rationale"
-                }
-            }
-        }
-        
         return jsonify({
-            'status': 'success',
-            'data': mock_data,
-            'mock': True,
-            'error': str(e)
-        }) 
+            'status': 'error',
+            'message': f"Server error: {str(e)}"
+        }), 500 
