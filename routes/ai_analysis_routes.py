@@ -53,13 +53,24 @@ async def fetch_market_data(symbol):
             logger.info(f"Cache expired for {symbol}, fetching fresh data")
     
     try:
-        # For Nasdaq, we use the ^IXIC symbol
-        if symbol.lower() == "nasdaq":
-            yahoo_symbol = "%5EIXIC"  # URL encoded ^IXIC
-            logger.info(f"Using Yahoo Finance symbol %5EIXIC for Nasdaq")
+        # Map asset names to Yahoo Finance symbols
+        yahoo_symbols = {
+            "nasdaq": "%5EIXIC",  # ^IXIC
+            "s&p500": "%5EGSPC",  # ^GSPC
+            "gold": "GC%3DF",     # GC=F
+            "usd/jpy": "JPY=X",   # JPY=X
+            "btcusd": "BTC-USD"   # BTC-USD
+        }
+        
+        symbol_lower = symbol.lower()
+        if symbol_lower in yahoo_symbols:
+            yahoo_symbol = yahoo_symbols[symbol_lower]
+            logger.info(f"Using Yahoo Finance symbol {yahoo_symbol} for {symbol}")
         else:
+            # Default to using the symbol as-is if not in our mapping
             yahoo_symbol = symbol
-            
+            logger.info(f"No mapping found for {symbol}, using as-is")
+        
         # Fetch from Yahoo Finance
         market_data = await _fetch_from_yahoo(yahoo_symbol)
         
@@ -281,19 +292,48 @@ async def advanced_market_analysis():
                 'message': 'AI service is not properly configured. Please check your API key.'
             }), 500
 
-        # Prepare system message for ChatGPT
-        system_message = """
-        You are an expert financial analyst and trader with deep knowledge of markets, technical analysis, and trading strategies.
-        Your task is to analyze the requested asset and provide a comprehensive trading strategy.
+        # Map asset names to their Yahoo Finance and TradingView URLs
+        asset_urls = {
+            "nasdaq": {
+                "yahoo": "https://finance.yahoo.com/quote/%5EIXIC/",
+                "tradingview": "https://www.tradingview.com/symbols/NASDAQ-IXIC/technicals/"
+            },
+            "s&p500": {
+                "yahoo": "https://finance.yahoo.com/quote/%5EGSPC/",
+                "tradingview": "https://www.tradingview.com/symbols/SPX/technicals/"
+            },
+            "gold": {
+                "yahoo": "https://finance.yahoo.com/quote/GC%3DF/",
+                "tradingview": "https://www.tradingview.com/symbols/COMEX-GC1!/technicals/"
+            },
+            "usd/jpy": {
+                "yahoo": "https://finance.yahoo.com/quote/JPY=X/",
+                "tradingview": "https://www.tradingview.com/symbols/USDJPY/technicals/"
+            },
+            "btcusd": {
+                "yahoo": "https://finance.yahoo.com/quote/BTC-USD/",
+                "tradingview": "https://www.tradingview.com/symbols/BTCUSD/technicals/"
+            }
+        }
         
-        IMPORTANT: You should actively search for current information about the requested asset, including:
+        # Get URLs for the requested asset
+        asset_lower = asset.lower()
+        yahoo_url = asset_urls.get(asset_lower, {}).get("yahoo", "https://finance.yahoo.com/")
+        tradingview_url = asset_urls.get(asset_lower, {}).get("tradingview", "https://www.tradingview.com/")
+        
+        # Prepare system message for ChatGPT
+        system_message = f"""
+        You are an expert financial analyst and trader with deep knowledge of markets, technical analysis, and trading strategies.
+        Your task is to analyze {asset} and provide a comprehensive trading strategy for a {term} with {risk_level} risk level.
+        
+        IMPORTANT: You should actively search for current information about {asset}, including:
         
         1. CURRENT MARKET DATA:
-           - Look up the latest price data on Yahoo Finance (e.g., https://finance.yahoo.com/quote/%5EIXIC/ for Nasdaq)
+           - Look up the latest price data on Yahoo Finance: {yahoo_url}
            - Find current price, volume, and basic indicators
         
         2. TECHNICAL ANALYSIS:
-           - Check TradingView (e.g., https://www.tradingview.com/symbols/NASDAQ-IXIC/technicals/ for Nasdaq)
+           - Check TradingView: {tradingview_url}
            - Research current RSI, MACD, Moving Averages, and support/resistance levels
         
         3. RECENT NEWS:
@@ -311,32 +351,32 @@ async def advanced_market_analysis():
         After gathering this information, analyze it and provide a comprehensive trading strategy.
         Format your response as a JSON object with the following structure:
         
-        {
+        {{
             "market_summary": "Comprehensive summary of current market conditions based on your research",
             "key_drivers": ["List of key market drivers and factors from your research"],
             "technical_analysis": "Detailed technical analysis with key indicators you found",
             "risk_assessment": "Assessment of market risks based on current data",
-            "trading_strategy": {
+            "trading_strategy": {{
                 "direction": "LONG or SHORT",
                 "rationale": "Explanation of the strategy direction based on your research",
-                "entry": {
+                "entry": {{
                     "price": "Recommended entry price or range",
                     "rationale": "Rationale for entry point"
-                },
-                "stop_loss": {
+                }},
+                "stop_loss": {{
                     "price": "Recommended stop loss price",
                     "rationale": "Rationale for stop loss placement"
-                },
-                "take_profit_1": {
+                }},
+                "take_profit_1": {{
                     "price": "First take profit target",
                     "rationale": "Rationale for TP1"
-                },
-                "take_profit_2": {
+                }},
+                "take_profit_2": {{
                     "price": "Second take profit target",
                     "rationale": "Rationale for TP2"
-                }
-            }
-        }
+                }}
+            }}
+        }}
         
         Your response MUST be a valid JSON object with this exact structure.
         
@@ -366,23 +406,41 @@ async def advanced_market_analysis():
             if market_data.get('exchange'):
                 current_price_info += f"- Exchange: {market_data['exchange']}\n"
 
+        # Define trading term descriptions
+        term_descriptions = {
+            "day trade": "very short-term (1-2 days)",
+            "swing trade": "short to medium-term (1-2 weeks)",
+            "position trade": "medium to long-term (1-3 months)"
+        }
+        
+        # Define risk level descriptions
+        risk_level_descriptions = {
+            "conservative": "conservative (prioritizing capital preservation with modest returns)",
+            "moderate": "moderate (balanced approach between risk and reward)",
+            "aggressive": "aggressive (higher risk tolerance for potentially higher returns)"
+        }
+        
+        # Get descriptions based on selected options
+        term_desc = term_descriptions.get(term.lower(), term)
+        risk_desc = risk_level_descriptions.get(risk_level.lower(), risk_level)
+
         user_message = f"""
         Please provide an advanced market analysis and trading strategy for:
         
         Asset: {asset}
-        Trading Term: {term}
-        Risk Level: {risk_level}
+        Trading Term: {term} ({term_desc})
+        Risk Level: {risk_level} ({risk_desc})
         
         {current_price_info}
         
         I need you to search for and provide a comprehensive analysis that includes:
         
         1. CURRENT MARKET CONDITIONS:
-           - Look up the latest price data and verify the current price
+           - Look up the latest price data and verify the current price for {asset}
            - Compare current price to recent trends
         
         2. TECHNICAL ANALYSIS:
-           - Research current technical indicators
+           - Research current technical indicators specific to {asset}
            - Identify key support/resistance levels
            - Analyze momentum indicators (RSI, MACD, etc.)
         
@@ -391,17 +449,18 @@ async def advanced_market_analysis():
            - Look for earnings reports, sector news, or market-moving events
         
         4. MACROECONOMIC FACTORS:
-           - Check recent economic data releases
+           - Check recent economic data releases that might affect {asset}
            - Consider how current Fed policy affects {asset}
            - Look for upcoming economic events that might impact the market
         
         5. MARKET SENTIMENT:
-           - Research current analyst opinions
+           - Research current analyst opinions about {asset}
            - Look for institutional positioning data if available
         
-        Based on this research, develop a detailed trading strategy with specific entry, stop-loss, and take-profit levels.
+        Based on this research, develop a detailed {term_desc} trading strategy with {risk_desc} risk profile.
+        Include specific entry, stop-loss, and take-profit levels appropriate for {asset}.
         
-        IMPORTANT: Make sure your price targets are realistic and close to the current market price. For swing trades, entry points should typically be within 5% of the current price.
+        IMPORTANT: Make sure your price targets are realistic and close to the current market price. For {term} strategies, entry points should typically be within 5% of the current price.
         
         Please format your response as a JSON object as specified in your instructions.
         """
@@ -436,6 +495,9 @@ async def advanced_market_analysis():
                 analysis_json['meta'] = {
                     'generated_at': time.strftime('%Y-%m-%d %H:%M:%S'),
                     'model': 'gpt-4o',
+                    'asset': asset,
+                    'term': term,
+                    'risk_level': risk_level,
                     'note': 'This analysis includes information the model has searched for about current market conditions, technical indicators, recent news, and market sentiment.'
                 }
                 
