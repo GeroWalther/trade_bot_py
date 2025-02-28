@@ -55,25 +55,13 @@ async def fetch_market_data(symbol):
     try:
         # For Nasdaq, we use the ^IXIC symbol
         if symbol.lower() == "nasdaq":
-            primary_symbol = "%5EIXIC"  # URL encoded ^IXIC
-            fallback_symbol = "QQQ"     # QQQ ETF as fallback
-            logger.info(f"Using Yahoo Finance symbol %5EIXIC for Nasdaq with QQQ as fallback")
+            yahoo_symbol = "%5EIXIC"  # URL encoded ^IXIC
+            logger.info(f"Using Yahoo Finance symbol %5EIXIC for Nasdaq")
         else:
-            primary_symbol = symbol
-            fallback_symbol = None
+            yahoo_symbol = symbol
             
-        # Try primary symbol first
-        market_data = await _fetch_from_yahoo(primary_symbol)
-        
-        # If primary symbol fails and we have a fallback, try that
-        if market_data.get('error') and fallback_symbol:
-            logger.info(f"Primary symbol failed, trying fallback symbol: {fallback_symbol}")
-            market_data = await _fetch_from_yahoo(fallback_symbol)
-            
-            # If fallback succeeds, adjust the data to represent the original symbol
-            if not market_data.get('error'):
-                market_data['symbol'] = symbol
-                market_data['note'] = f"Data from related symbol: {fallback_symbol}"
+        # Fetch from Yahoo Finance
+        market_data = await _fetch_from_yahoo(yahoo_symbol)
         
         # Cache successful results
         if not market_data.get('error'):
