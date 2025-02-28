@@ -12,9 +12,22 @@ from datetime import datetime
 from fastapi import HTTPException
 from quart_cors import cors
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging - Set higher log levels to reduce output
+logging.basicConfig(
+    level=logging.WARNING,  # Set to WARNING to reduce info logs
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+# Only show INFO logs for our application
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# Silence other loggers
+logging.getLogger('quart').setLevel(logging.WARNING)
+logging.getLogger('asyncio').setLevel(logging.WARNING)
+logging.getLogger('hypercorn').setLevel(logging.WARNING)
+logging.getLogger('urllib3').setLevel(logging.WARNING)
+logging.getLogger('anthropic').setLevel(logging.WARNING)
+logging.getLogger('openai').setLevel(logging.WARNING)
 
 def create_app():
     app = Quart(__name__)
@@ -73,5 +86,9 @@ async def get_news(symbol):
         })
 
 if __name__ == '__main__':
-    logger.info("Starting AI Analysis server on port 5003...")
-    app.run(host='0.0.0.0', port=5003, debug=True) 
+    print("\n" + "="*50)
+    print("Starting AI Analysis server on port 5003...")
+    print("="*50 + "\n")
+    logger.info("AI Analysis server is running")
+    # Set debug to False to reduce logs
+    app.run(host='0.0.0.0', port=5003, debug=False) 
