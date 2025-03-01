@@ -5,6 +5,8 @@ import time
 import json
 import aiohttp
 import asyncio
+import os
+import pickle
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +54,14 @@ class AIStrategy:
         self.last_check_time = None
         self.status_updates = []
         self.trades_history = []
-        self.performance = {
+        
+        # Define the cache directory and file path
+        self.cache_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'cache')
+        os.makedirs(self.cache_dir, exist_ok=True)
+        self.cache_file = os.path.join(self.cache_dir, f"ai_strategy_{self.parameters['symbol']}_performance.pkl")
+        
+        # Load performance data from cache if it exists
+        self.performance = self.load_performance_from_cache() or {
             'total_trades': 0,
             'winning_trades': 0,
             'losing_trades': 0,
@@ -60,13 +69,103 @@ class AIStrategy:
             'largest_win': 0,
             'largest_loss': 0,
             'current_drawdown': 0,
-            'max_drawdown': 0
+            'max_drawdown': 0,
+            'daily_pl': 0.0,
+            'last_update_date': datetime.now().strftime('%Y-%m-%d')
         }
+        
         self.current_trade = None
         self.last_analysis = None
         self._thread = None
         self.ai_analysis = None
         self.last_analysis_time = None
+        
+        # Start a separate thread to periodically update and save performance metrics
+        self._performance_thread = threading.Thread(target=self.performance_update_loop, daemon=True)
+        self._performance_thread.start()
+
+    def load_performance_from_cache(self):
+        """Load performance data from cache file"""
+        try:
+            if os.path.exists(self.cache_file):
+                with open(self.cache_file, 'rb') as f:
+                    performance_data = pickle.load(f)
+                logger.info(f"Loaded performance data from cache: {performance_data}")
+                return performance_data
+        except Exception as e:
+            logger.error(f"Error loading performance data from cache: {e}", exc_info=True)
+        return None
+        
+    def save_performance_to_cache(self):
+        """Save performance data to cache file"""
+        try:
+            with open(self.cache_file, 'wb') as f:
+                pickle.dump(self.performance, f)
+            logger.info(f"Saved performance data to cache: {self.performance}")
+        except Exception as e:
+            logger.error(f"Error saving performance data to cache: {e}", exc_info=True)
+    
+    def clear_performance_cache(self):
+        """Clear the performance cache file"""
+        try:
+            if os.path.exists(self.cache_file):
+                os.remove(self.cache_file)
+                self.performance = {
+                    'total_trades': 0,
+                    'winning_trades': 0,
+                    'losing_trades': 0,
+                    'total_profit_loss': 0,
+                    'largest_win': 0,
+                    'largest_loss': 0,
+                    'current_drawdown': 0,
+                    'max_drawdown': 0,
+                    'daily_pl': 0.0,
+                    'last_update_date': datetime.now().strftime('%Y-%m-%d')
+                }
+                logger.info("Performance cache cleared")
+                self.log_status("🧹 Performance metrics have been reset")
+        except Exception as e:
+            logger.error(f"Error clearing performance cache: {e}", exc_info=True)
+    
+    def performance_update_loop(self):
+        """Background thread to update and save performance metrics periodically"""
+        while True:
+            try:
+                # Check if we need to reset daily P/L (new day)
+                today = datetime.now().strftime('%Y-%m-%d')
+                if self.performance.get('last_update_date') != today:
+                    self.log_status(f"📊 New trading day: Resetting daily P/L from €{self.performance.get('daily_pl', 0.0):.2f} to €0.00")
+                    self.performance['daily_pl'] = 0.0
+                    self.performance['last_update_date'] = today
+                
+                # Update real-time metrics if we have an open position
+                if self.current_trade:
+                    symbol = self.current_trade['symbol']
+                    current_price = self.broker.get_last_price(symbol)
+                    
+                    if current_price:
+                        entry_price = self.current_trade['entry_price']
+                        quantity = self.current_trade['quantity']
+                        
+                        # Calculate unrealized P/L
+                        if self.current_trade['side'] == 'BUY':
+                            unrealized_pl = (current_price - entry_price) * quantity
+                        else:  # SELL
+                            unrealized_pl = (entry_price - current_price) * quantity
+                        
+                        # Update daily P/L with unrealized profit/loss
+                        # Note: This is just for display, we'll adjust when the trade is closed
+                        self.performance['unrealized_pl'] = unrealized_pl
+                
+                # Save performance data to cache
+                self.save_performance_to_cache()
+                
+                # Sleep for 30 seconds before the next update
+                time.sleep(30)
+                
+            except Exception as e:
+                logger.error(f"Error in performance update loop: {e}", exc_info=True)
+                time.sleep(60)  # Sleep for a minute if there's an error
 
     async def get_ai_analysis(self):
         """Get AI analysis for the configured asset, term, and risk level"""
@@ -534,11 +633,22 @@ class AIStrategy:
                     'stop_loss': self.current_trade['stop_loss']
                 }
         
+        # Calculate win rate
+        win_rate = 0.0
+        if self.performance['total_trades'] > 0:
+            win_rate = (self.performance['winning_trades'] / self.performance['total_trades']) * 100
+        
+        # Include performance metrics in the status
+        performance_data = {
+            **self.performance,
+            'win_rate': win_rate
+        }
+        
         return {
             'name': f"AI {asset_name} Strategy",
             'running': self._continue,
             'parameters': self.parameters,
-            'performance': self.performance,
+            'performance': performance_data,
             'recent_updates': self.status_updates,
             'available_instruments': self.available_instruments,
             'current_trade': current_position,
@@ -563,6 +673,9 @@ class AIStrategy:
         self.performance['total_trades'] += 1
         self.performance['total_profit_loss'] += profit_loss
         
+        # Update daily P/L
+        self.performance['daily_pl'] = self.performance.get('daily_pl', 0.0) + profit_loss
+        
         if profit_loss > 0:
             self.performance['winning_trades'] += 1
             if profit_loss > self.performance['largest_win']:
@@ -574,6 +687,20 @@ class AIStrategy:
                 
         # Calculate drawdown
         self.calculate_drawdown()
+        
+        # Save updated performance to cache
+        self.save_performance_to_cache()
+        
+        # Log performance update
+        win_rate = 0.0
+        if self.performance['total_trades'] > 0:
+            win_rate = (self.performance['winning_trades'] / self.performance['total_trades']) * 100
+            
+        self.log_status(
+            f"📊 Performance Update: Win Rate: {win_rate:.1f}%, "
+            f"Total Trades: {self.performance['total_trades']}, "
+            f"Daily P/L: €{self.performance['daily_pl']:.2f}"
+        )
 
     def calculate_drawdown(self):
         """Calculate current and maximum drawdown"""
