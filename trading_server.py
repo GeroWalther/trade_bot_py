@@ -9,6 +9,7 @@ import pytz
 from trading_state import strategy, initialize_strategy
 from strategies.ema_trend import EMATrendStrategy
 from strategies.bb_strategy import BBStrategy
+from strategies.ai_strategy import AIStrategy
 import threading
 import time
 from services.market_intelligence_service import MarketIntelligenceService
@@ -23,9 +24,20 @@ try:
     broker = OandaTrader(OANDA_CREDS)
     logger.info("Successfully initialized OANDA broker")
     
-    # Initialize both strategies
+    # Initialize strategies
     bb_strategy = BBStrategy(broker)
     ema_strategy = EMATrendStrategy(broker=broker)
+    
+    # Initialize AI Gold Day Trading Strategy with conservative risk
+    ai_gold_strategy = AIStrategy(broker=broker, parameters={
+        'symbol': 'XAU_USD',  # Gold
+        'quantity': 0.1,
+        'check_interval': 1800,  # Check every 30 minutes
+        'continue_after_trade': True,
+        'max_concurrent_trades': 1,
+        'trading_term': 'Day trade',
+        'risk_level': 'conservative'
+    })
     
     logger.info("Successfully initialized strategies")
 except Exception as e:
@@ -280,37 +292,39 @@ def get_positions():
 
 @app.route('/api/bots', methods=['GET'])
 def get_bots():
-    """Get status of all bots"""
-    try:
-        logger.info("Getting bots status...")
-        logger.info(f"EMA Strategy exists: {ema_strategy is not None}")
-        logger.info(f"BB Strategy exists: {bb_strategy is not None}")
-        
-        response = {
-            'status': 'success',
-            'bots': {
-                'ema_strategy': {
-                    'name': 'EMA Trend Strategy',
-                    'running': ema_strategy.should_continue(),
-                    'parameters': ema_strategy.parameters,
-                    'status': ema_strategy.get_status()
-                },
-                'bb_strategy': {
-                    'name': 'Bollinger Bands Strategy',
-                    'running': bb_strategy.should_continue(),
-                    'parameters': bb_strategy.parameters,
-                    'status': bb_strategy.get_status()
-                }
+    logger.info("Getting bots status...")
+    
+    # Check if strategies exist
+    logger.info(f"EMA Strategy exists: {ema_strategy is not None}")
+    logger.info(f"BB Strategy exists: {bb_strategy is not None}")
+    logger.info(f"AI Gold Strategy exists: {ai_gold_strategy is not None}")
+    
+    response = {
+        'status': 'success',
+        'bots': {
+            'ema_strategy': {
+                'name': 'EMA Trend Strategy',
+                'running': ema_strategy.should_continue() if ema_strategy else False,
+                'parameters': ema_strategy.parameters if ema_strategy else {},
+                'status': ema_strategy.get_status() if ema_strategy else {}
+            },
+            'bb_strategy': {
+                'name': 'Bollinger Bands Strategy',
+                'running': bb_strategy.should_continue() if bb_strategy else False,
+                'parameters': bb_strategy.parameters if bb_strategy else {},
+                'status': bb_strategy.get_status() if bb_strategy else {}
+            },
+            'ai_gold_strategy': {
+                'name': 'AI Gold Strategy',
+                'running': ai_gold_strategy.should_continue() if ai_gold_strategy else False,
+                'parameters': ai_gold_strategy.parameters if ai_gold_strategy else {},
+                'status': ai_gold_strategy.get_status() if ai_gold_strategy else {}
             }
         }
-        logger.info(f"Returning bots: {response}")
-        return jsonify(response)
-    except Exception as e:
-        logger.error(f"Error getting bots: {e}", exc_info=True)
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 500
+    }
+    
+    logger.info(f"Returning bots: {response}")
+    return jsonify(response)
 
 def start_strategy(strategy):
     """Start strategy in a background thread"""
@@ -357,6 +371,21 @@ def toggle_bot(bot_id):
             else:
                 start_strategy(ema_strategy)
                 new_status = 'running'
+                
+        elif bot_id == 'ai_gold_strategy':
+            if not ai_gold_strategy:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Strategy not initialized'
+                }), 400
+                
+            was_running = ai_gold_strategy.should_continue()
+            if was_running:
+                ai_gold_strategy.stop()
+                new_status = 'stopped'
+            else:
+                start_strategy(ai_gold_strategy)
+                new_status = 'running'
             
         return jsonify({
             'status': 'success',
@@ -374,84 +403,53 @@ def toggle_bot(bot_id):
 @app.route('/api/bots/<bot_id>/parameters', methods=['PUT'])
 def update_bot_parameters(bot_id):
     try:
-        settings = request.get_json()
-        logger.info(f"Received settings update for {bot_id}: {settings}")
+        data = request.json
+        logger.info(f"Updating parameters for {bot_id}: {data}")
         
-        if bot_id == 'ema_strategy':
-            # Log current state
-            logger.info(f"Current parameters: {ema_strategy.parameters}")
-            
-            # Create a copy of current parameters
-            new_params = ema_strategy.parameters.copy()
-            
-            # Validate and update settings
-            if 'check_interval' in settings:
-                new_params['check_interval'] = int(settings['check_interval'])
-            if 'continue_after_trade' in settings:
-                new_params['continue_after_trade'] = bool(settings['continue_after_trade'])
-            if 'max_concurrent_trades' in settings:
-                new_params['max_concurrent_trades'] = max(1, min(5, int(settings['max_concurrent_trades'])))
-            
-            # Stop strategy if running
-            was_running = ema_strategy._continue
-            if was_running:
-                ema_strategy.stop()
-                time.sleep(1)  # Give it time to stop
-            
-            # Update parameters
-            ema_strategy.parameters = new_params
-            
-            # Log updated state
-            logger.info(f"Updated parameters: {ema_strategy.parameters}")
-            
-            # Restart if it was running
-            if was_running:
-                start_strategy(ema_strategy)
-            
-            return jsonify({
-                'status': 'success',
-                'message': 'Bot parameters updated successfully',
-                'parameters': ema_strategy.parameters
-            })
-            
-        elif bot_id == 'bb_strategy':
-            # Validate settings
-            if 'check_interval' in settings:
-                settings['check_interval'] = int(settings['check_interval'])
-            if 'continue_after_trade' in settings:
-                settings['continue_after_trade'] = bool(settings['continue_after_trade'])
-            if 'max_concurrent_trades' in settings:
-                settings['max_concurrent_trades'] = max(1, min(5, int(settings['max_concurrent_trades'])))
-            
-            # Stop the strategy temporarily
-            was_running = bb_strategy._continue
-            if was_running:
-                bb_strategy.stop()
-            
-            # Update settings
-            bb_strategy.parameters.update(settings)
-            
-            # Restart if it was running
-            if was_running:
-                bb_strategy.start()
-            
-            return jsonify({
-                'status': 'success',
-                'message': 'Bot parameters updated successfully',
-                'parameters': bb_strategy.parameters
-            })
+        # Get the appropriate strategy based on bot_id
+        if bot_id == 'bb_strategy':
+            if not bb_strategy:
+                return jsonify({'status': 'error', 'message': 'BB Strategy not initialized'}), 400
+            strategy_instance = bb_strategy
+        elif bot_id == 'ema_strategy':
+            if not ema_strategy:
+                return jsonify({'status': 'error', 'message': 'EMA Strategy not initialized'}), 400
+            strategy_instance = ema_strategy
+        elif bot_id == 'ai_gold_strategy':
+            if not ai_gold_strategy:
+                return jsonify({'status': 'error', 'message': 'AI Gold Strategy not initialized'}), 400
+            strategy_instance = ai_gold_strategy
+        else:
+            return jsonify({'status': 'error', 'message': f'Bot {bot_id} not found'}), 404
         
-        return jsonify({
-            'status': 'error',
-            'message': f'Bot {bot_id} not found'
-        }), 404
+        # Get the current parameters
+        current_params = strategy_instance.parameters.copy()
         
+        # Update parameters
+        for key, value in data.items():
+            if key in current_params:
+                # Handle numeric values
+                if isinstance(current_params[key], (int, float)) and isinstance(value, (int, float)):
+                    current_params[key] = value
+                # Handle boolean values
+                elif isinstance(current_params[key], bool) and isinstance(value, bool):
+                    current_params[key] = value
+                # Handle string values
+                elif isinstance(current_params[key], str) and isinstance(value, str):
+                    current_params[key] = value
+                else:
+                    # For any other type, just update it
+                    current_params[key] = value
+        
+        # Update the strategy parameters
+        strategy_instance.parameters = current_params
+        
+        logger.info(f"Updated parameters for {bot_id}: {current_params}")
+        return jsonify({'status': 'success', 'message': 'Parameters updated', 'parameters': current_params})
+    
     except Exception as e:
-        logger.error(f"Error updating bot parameters: {e}", exc_info=True)
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 400
+        logger.error(f"Error updating parameters for {bot_id}: {str(e)}", exc_info=True)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/bots/<bot_id>/status', methods=['GET'])
 def get_bot_status(bot_id):
@@ -465,6 +463,11 @@ def get_bot_status(bot_id):
             return jsonify({
                 'status': 'success',
                 'data': ema_strategy.get_status()
+            })
+        elif bot_id == 'ai_gold_strategy' and ai_gold_strategy:
+            return jsonify({
+                'status': 'success',
+                'data': ai_gold_strategy.get_status()
             })
             
         logger.error(f"Bot {bot_id} not found or not initialized")
@@ -490,6 +493,11 @@ def debug_strategies():
             'initialized': ema_strategy is not None,
             'running': ema_strategy.should_continue() if ema_strategy else False,
             'available_instruments': ema_strategy.available_instruments if ema_strategy else None
+        },
+        'ai_gold_strategy': {
+            'initialized': ai_gold_strategy is not None,
+            'running': ai_gold_strategy.should_continue() if ai_gold_strategy else False,
+            'parameters': ai_gold_strategy.parameters if ai_gold_strategy else None
         }
     })
 
