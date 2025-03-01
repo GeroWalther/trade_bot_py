@@ -56,8 +56,12 @@ def execute_trade():
         symbol = data.get('symbol', 'EUR_USD')
         side = data.get('side', 'buy')
         quantity = data.get('quantity', 1000)
+        order_type = data.get('order_type', 'market')
+        price = data.get('price')  # Entry price for pending orders
+        take_profit = data.get('take_profit')  # Take profit price
+        stop_loss = data.get('stop_loss')  # Stop loss price
         
-        logger.info(f"Processed request parameters: symbol={symbol}, side={side}, quantity={quantity}")
+        logger.info(f"Processed request parameters: symbol={symbol}, side={side}, quantity={quantity}, order_type={order_type}, price={price}, take_profit={take_profit}, stop_loss={stop_loss}")
         
         # Get current positions to check if we already have one
         current_positions = broker.get_tracked_positions()
@@ -70,14 +74,19 @@ def execute_trade():
         if not broker.is_market_open(symbol):
             return jsonify({
                 'status': 'error',
-                'message': f'Market is closed for {symbol}'
+                'message': f'Market is closed for {symbol}',
+                'error_code': 'MARKET_HALTED'
             }), 400
         
         order = {
             'strategy': None,
             'symbol': symbol,
             'quantity': quantity,
-            'side': side
+            'side': side,
+            'order_type': order_type,
+            'price': price,
+            'take_profit': take_profit,
+            'stop_loss': stop_loss
         }
         
         logger.info(f"Submitting order to broker: {order}")

@@ -297,6 +297,10 @@ class OandaTrader:
             symbol = order['symbol']
             quantity = order['quantity']
             side = order['side']
+            order_type = order.get('order_type', 'market')
+            price = order.get('price')
+            take_profit = order.get('take_profit')
+            stop_loss = order.get('stop_loss')
             
             # Verify market is open
             if not self.is_market_open(symbol):
@@ -337,13 +341,38 @@ class OandaTrader:
             # Create OANDA order data
             order_data = {
                 "order": {
-                    "type": "MARKET",
                     "instrument": symbol,
                     "units": units,
-                    "timeInForce": "FOK",
                     "positionFill": "DEFAULT"
                 }
             }
+            
+            # Set order type and price
+            if order_type == 'market':
+                order_data["order"]["type"] = "MARKET"
+                order_data["order"]["timeInForce"] = "FOK"
+            elif order_type == 'pending':
+                # For pending orders, we use LIMIT orders
+                if not price:
+                    logging.error("Price is required for pending orders")
+                    raise Exception("Price is required for pending orders")
+                
+                order_data["order"]["type"] = "LIMIT"
+                order_data["order"]["price"] = str(price)
+                order_data["order"]["timeInForce"] = "GTC"  # Good Till Cancelled
+            
+            # Add take profit if specified
+            if take_profit is not None:
+                order_data["order"]["takeProfitOnFill"] = {
+                    "price": str(take_profit)
+                }
+            
+            # Add stop loss if specified
+            if stop_loss is not None:
+                order_data["order"]["stopLossOnFill"] = {
+                    "price": str(stop_loss)
+                }
+            
             logging.info(f"OANDA order data: {order_data}")
             
             # Submit order to OANDA
