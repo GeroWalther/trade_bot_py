@@ -73,10 +73,20 @@ def execute_trade():
             order_id = broker.submit_order(order)
             logger.info(f"Broker response - order_id: {order_id}")
         except Exception as e:
-            logger.error(f"Error submitting order: {e}", exc_info=True)
+            error_message = str(e)
+            logger.error(f"Error submitting order: {error_message}", exc_info=True)
+            
+            # Check for specific error messages
+            if "MARKET_HALTED" in error_message:
+                return jsonify({
+                    'status': 'error',
+                    'message': f'Trading for {symbol} is currently halted. Please try again later or choose a different instrument.',
+                    'error_code': 'MARKET_HALTED'
+                }), 400
+            
             return jsonify({
                 'status': 'error',
-                'message': f'Order submission error: {str(e)}'
+                'message': f'Order submission error: {error_message}'
             }), 400
         
         if order_id:
@@ -84,6 +94,16 @@ def execute_trade():
             positions = broker.get_tracked_positions()
             position_info = positions.get(symbol, {})
             logger.info(f"Updated position info: {position_info}")
+            
+            # Check if the position was actually created
+            if not position_info and side != 'sell':  # We expect a position for buy orders
+                logger.warning(f"Order was created but no position found for {symbol}")
+                return jsonify({
+                    'status': 'warning',
+                    'order_id': order_id,
+                    'message': 'Order was processed but no position was created. This might be due to market conditions.',
+                    'position': {}
+                }), 200
             
             response = {
                 'status': 'success',

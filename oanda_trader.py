@@ -351,6 +351,12 @@ class OandaTrader:
             response = self.api.request(r)
             logging.info(f"OANDA raw response: {response}")
             
+            # Check if the order was canceled
+            if 'orderCancelTransaction' in response:
+                cancel_reason = response['orderCancelTransaction'].get('reason', 'Unknown reason')
+                logging.error(f"Order was canceled by OANDA: {cancel_reason}")
+                raise Exception(f"Order was canceled by OANDA: {cancel_reason}")
+            
             if 'orderCreateTransaction' in response:
                 order_id = response['orderCreateTransaction']['id']
                 logging.info(f"Order created successfully with ID: {order_id}")
