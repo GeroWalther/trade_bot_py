@@ -276,6 +276,9 @@ class AIStrategy:
                         else:
                             # Just use the first part if splitting doesn't work as expected
                             entry_price = float(price_parts[0].replace(',', ''))
+                    else:
+                        # No range, just convert to float
+                        entry_price = float(entry_price.replace(',', ''))
                 else:
                     entry_price = float(entry_price)
             except (ValueError, TypeError):
@@ -353,10 +356,9 @@ class AIStrategy:
                 # Calculate price difference percentage
                 price_diff_pct = abs(current_price - entry_price) / entry_price * 100
                 
-                # Check if current price is close to the recommended entry price (within 1%)
-                if price_diff_pct > 1.0:
-                    self.log_status(f"ℹ️ Current price ({current_price:.2f}) is {price_diff_pct:.2f}% away from recommended entry ({entry_price:.2f})")
-                    return False
+                # Log the price difference but don't use it as a condition to prevent trade entry
+                self.log_status(f"ℹ️ Current price ({current_price:.2f}) is {price_diff_pct:.2f}% away from recommended entry ({entry_price:.2f})")
+                
             except (TypeError, ValueError) as e:
                 self.log_status(f"❌ Error calculating price difference: {str(e)}")
                 return False
@@ -469,7 +471,6 @@ class AIStrategy:
             # Parse take profit and stop loss from AI recommendation before submitting the order
             try:
                 take_profit = trading_strategy['take_profit_1']['price']
-                self.log_status(f"Raw take profit from AI: {take_profit} (type: {type(take_profit)})")
                 
                 if isinstance(take_profit, str):
                     # Handle price ranges like "2890-2900" or "2890 - 2900"
@@ -499,7 +500,6 @@ class AIStrategy:
                     take_profit = float(take_profit)
                 
                 stop_loss_str = trading_strategy['stop_loss']['price']
-                self.log_status(f"Raw stop loss from AI: {stop_loss_str} (type: {type(stop_loss_str)})")
                 
                 if isinstance(stop_loss_str, str):
                     # Handle price ranges like "2890-2900" or "2890 - 2900"
@@ -574,7 +574,6 @@ class AIStrategy:
                 # Ensure the order has the latest quantity value
                 order['quantity'] = quantity
                 
-                self.log_status(f"Final parsed values - Take Profit: {take_profit} (type: {type(take_profit)}), Stop Loss: {stop_loss} (type: {type(stop_loss)})")
             except (ValueError, TypeError, KeyError) as e:
                 self.log_status(f"⚠️ Could not parse take profit or stop loss values: {str(e)}, proceeding without them")
                 take_profit = None
@@ -610,7 +609,20 @@ class AIStrategy:
                         'ai_analysis': self.ai_analysis
                     }
                     
-                    self.log_status(f"✅ Position opened successfully at {entry_price:.2f}")
+                    # Determine the order type for the log message
+                    if order.get('order_type') == 'pending':
+                        # For pending orders, determine if it's a limit or stop order
+                        if side == 'buy':
+                            # Buy Limit if entry price is below current price, Buy Stop if above
+                            order_type_str = "Buy Limit" if entry_price < current_price else "Buy Stop"
+                        else:  # sell
+                            # Sell Limit if entry price is above current price, Sell Stop if below
+                            order_type_str = "Sell Limit" if entry_price > current_price else "Sell Stop"
+                        
+                        self.log_status(f"✅ {order_type_str} Pending Order placed successfully at {entry_price:.2f}")
+                    else:
+                        # For market orders
+                        self.log_status(f"✅ Market Order opened successfully at {entry_price:.2f}")
                     
                     # If Continue After Trade is set to No, stop the bot immediately after entering a trade
                     if not self.parameters.get('continue_after_trade', True):
@@ -731,13 +743,15 @@ class AIStrategy:
                 profit_loss = (current_price - entry_price) * quantity
                 profit_pct = ((current_price - entry_price) / entry_price) * 100
                 exit_side = 'sell'
+                position_type = "Long"
             else:
                 profit_loss = (entry_price - current_price) * quantity
                 profit_pct = ((entry_price - current_price) / entry_price) * 100
                 exit_side = 'buy'
+                position_type = "Short"
             
             self.log_status(
-                f"🔄 Closing position - Entry: {entry_price:.2f}, "
+                f"🔄 Closing {position_type} position - Entry: {entry_price:.2f}, "
                 f"Exit: {current_price:.2f}, "
                 f"P/L: {profit_loss:.2f} ({profit_pct:.2f}%)"
             )
@@ -767,8 +781,12 @@ class AIStrategy:
                 self.trades_history.append(trade_result)
                 self.current_trade = None
                 
+                # Determine if the trade was profitable or not
+                result_emoji = "✅" if profit_loss > 0 else "❌"
+                result_text = "PROFIT" if profit_loss > 0 else "LOSS"
+                
                 self.log_status(
-                    f"✅ Position closed - Duration: {trade_result['duration']:.1f} minutes, "
+                    f"{result_emoji} {position_type} position closed with {result_text} - Duration: {trade_result['duration']:.1f} minutes, "
                     f"P/L: {profit_loss:.2f} ({profit_pct:.2f}%), "
                     f"Total P/L: {self.performance['total_profit_loss']:.2f}"
                 )
@@ -789,7 +807,6 @@ class AIStrategy:
             f"   Asset: {self.parameters['symbol']}\n"
             f"   Term: {self.parameters['trading_term']}\n"
             f"   Risk Level: {self.parameters['risk_level']}\n"
-            f"   Quantity: {self.parameters['quantity']}\n"
             f"   Check Interval: {self.parameters['check_interval']}s\n"
             f"   Continue After Trade: {'Yes' if self.parameters['continue_after_trade'] else 'No'}"
         )
@@ -879,6 +896,10 @@ class AIStrategy:
 
     def stop(self):
         """Stop the strategy"""
+        if not self._continue:
+            self.log_status("ℹ️ Strategy is already stopped")
+            return
+            
         self.log_status("🛑 Strategy stopped")
         self._continue = False
         self.clear_data()
@@ -892,7 +913,6 @@ class AIStrategy:
         # Keep performance data but reset current trade data
         if hasattr(self, 'performance'):
             self.performance['current_trade'] = None
-        self.log_status("🧹 Strategy data cleared")
 
     def should_continue(self):
         """Check if strategy should continue running"""
