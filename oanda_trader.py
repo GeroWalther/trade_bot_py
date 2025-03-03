@@ -5,6 +5,7 @@ import oandapyV20.endpoints.orders as orders
 import oandapyV20.endpoints.positions as positions
 import oandapyV20.endpoints.accounts as accounts
 import oandapyV20.endpoints.instruments as instruments
+import oandapyV20.endpoints.trades as trades
 from oandapyV20 import API
 import pandas as pd
 import logging
@@ -187,35 +188,73 @@ class OandaTrader:
             logging.info(f"OANDA positions response: {response}")
             
             tracked_positions = {}
+            
+            # Get all open trades
+            r_trades = trades.OpenTrades(accountID=self.account_id)
+            trades_response = self.api.request(r_trades)
+            logging.info(f"OANDA trades response: {trades_response}")
+            
+            # Create a map of trade IDs to their details
+            trade_details = {}
+            for trade in trades_response.get('trades', []):
+                trade_details[trade['id']] = {
+                    'price': float(trade['price']),
+                    'unrealizedPL': float(trade['unrealizedPL']),
+                    'units': float(trade['currentUnits'])
+                }
+            
             for position in response.get('positions', []):
                 symbol = position['instrument']
-                
-                # Get long/short position details
-                long_units = float(position.get('long', {}).get('units', 0))
-                short_units = float(position.get('short', {}).get('units', 0))
-                
-                # Determine if long or short position
-                quantity = long_units if long_units != 0 else short_units
-                entry_price = float(position.get('long' if long_units != 0 else 'short', {}).get('averagePrice', 0))
-                
-                # Get current price
                 current_price = self.get_last_price(symbol)
                 
-                # Calculate P/L
-                pl_euro = float(position.get('unrealizedPL', 0))
-                pl_pct = ((current_price - entry_price) / entry_price * 100) if current_price else 0
-                if quantity < 0:  # Invert percentage for short positions
-                    pl_pct = -pl_pct
+                # Handle long positions
+                if 'long' in position and float(position['long'].get('units', 0)) != 0:
+                    for trade_id in position['long']['tradeIDs']:
+                        if trade_id in trade_details:
+                            trade = trade_details[trade_id]
+                            position_key = f"{symbol}_{trade_id}"
+                            entry_price = trade['price']
+                            quantity = trade['units']
+                            
+                            # Calculate P/L for this specific trade
+                            pl_euro = trade['unrealizedPL']
+                            pl_pct = ((current_price - entry_price) / entry_price * 100) if current_price else 0
+                            
+                            tracked_positions[position_key] = {
+                                'quantity': quantity,
+                                'entry_price': entry_price,
+                                'current_price': current_price,
+                                'pl_euro': pl_euro,
+                                'profit_pct': pl_pct,
+                                'side': 'LONG',
+                                'symbol': symbol,
+                                'trade_id': trade_id
+                            }
                 
-                tracked_positions[symbol] = {
-                    'quantity': quantity,
-                    'entry_price': entry_price,
-                    'current_price': current_price,
-                    'pl_euro': pl_euro,
-                    'profit_pct': pl_pct,
-                    'side': 'LONG' if quantity > 0 else 'SHORT'
-                }
-                
+                # Handle short positions
+                if 'short' in position and float(position['short'].get('units', 0)) != 0:
+                    for trade_id in position['short']['tradeIDs']:
+                        if trade_id in trade_details:
+                            trade = trade_details[trade_id]
+                            position_key = f"{symbol}_{trade_id}"
+                            entry_price = trade['price']
+                            quantity = trade['units']
+                            
+                            # Calculate P/L for this specific trade
+                            pl_euro = trade['unrealizedPL']
+                            pl_pct = ((entry_price - current_price) / entry_price * 100) if current_price else 0
+                            
+                            tracked_positions[position_key] = {
+                                'quantity': quantity,
+                                'entry_price': entry_price,
+                                'current_price': current_price,
+                                'pl_euro': pl_euro,
+                                'profit_pct': pl_pct,
+                                'side': 'SHORT',
+                                'symbol': symbol,
+                                'trade_id': trade_id
+                            }
+            
             logging.info(f"Tracked positions: {tracked_positions}")
             return tracked_positions
             
