@@ -13,6 +13,7 @@ from strategies.ai_strategy import AIStrategy
 import threading
 import time
 from services.market_intelligence_service import MarketIntelligenceService
+import oandapyV20.endpoints.trades as trades
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -162,31 +163,44 @@ def execute_trade():
         logger.error(f"Exception in execute_trade: {e}", exc_info=True)
         return jsonify(error_response), 500
 
-@app.route('/close-position/<symbol>', methods=['POST'])
-def close_position(symbol):
+@app.route('/close-position/<trade_id>', methods=['POST'])
+def close_position(trade_id):
     try:
         # Get current positions before closing
         initial_positions = broker.get_tracked_positions()
-        if symbol not in initial_positions:
+        
+        # Find the position with the given trade ID
+        position = None
+        for pos_key, pos_data in initial_positions.items():
+            if pos_data['trade_id'] == trade_id:
+                position = pos_data
+                break
+                
+        if not position:
             return jsonify({
                 'status': 'error',
-                'message': 'No position found'
+                'message': 'No position found with the given trade ID'
             }), 404
             
-        position = initial_positions[symbol]
         order = {
             'strategy': None,
-            'symbol': symbol,
+            'symbol': position['symbol'],
             'quantity': abs(position['quantity']),
             'side': 'sell' if position['quantity'] > 0 else 'buy'
         }
         
-        logger.info(f"Closing position for {symbol}: {order}")
+        logger.info(f"Closing position for trade ID {trade_id}: {order}")
         order_id = broker.submit_order(order)
         
         # Verify position was actually closed by checking updated positions
         updated_positions = broker.get_tracked_positions()
-        if symbol not in updated_positions:
+        position_still_exists = False
+        for pos_data in updated_positions.values():
+            if pos_data['trade_id'] == trade_id:
+                position_still_exists = True
+                break
+                
+        if not position_still_exists:
             # Position was successfully closed
             return jsonify({
                 'status': 'success',
@@ -607,6 +621,75 @@ def cancel_order(order_id):
         
     except Exception as e:
         logger.error(f"Error canceling order: {e}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/modify-position', methods=['POST'])
+def modify_position():
+    try:
+        data = request.get_json()
+        logger.info(f"Received position modification request: {data}")
+        
+        trade_id = data.get('trade_id')
+        take_profit = data.get('take_profit')
+        stop_loss = data.get('stop_loss')
+        
+        if not trade_id:
+            return jsonify({
+                'status': 'error',
+                'message': 'Trade ID is required'
+            }), 400
+            
+        # Get trade details from OANDA
+        r = trades.TradeCRCDO(accountID=broker.account_id, tradeID=trade_id)
+        response = broker.api.request(r)
+        
+        if 'trade' not in response:
+            return jsonify({
+                'status': 'error',
+                'message': 'Trade not found'
+            }), 404
+            
+        trade = response['trade']
+        
+        # Prepare modification data
+        data = {
+            "takeProfit": {
+                "price": str(take_profit)
+            } if take_profit is not None else None,
+            "stopLoss": {
+                "price": str(stop_loss)
+            } if stop_loss is not None else None
+        }
+        
+        # Remove None values
+        data = {k: v for k, v in data.items() if v is not None}
+        
+        if not data:
+            return jsonify({
+                'status': 'error',
+                'message': 'No modifications specified'
+            }), 400
+            
+        # Submit modification request
+        r = trades.TradeCRCDO(accountID=broker.account_id, tradeID=trade_id, data=data)
+        response = broker.api.request(r)
+        
+        if 'errorMessage' in response:
+            return jsonify({
+                'status': 'error',
+                'message': response['errorMessage']
+            }), 400
+            
+        return jsonify({
+            'status': 'success',
+            'message': 'Position modified successfully'
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error modifying position: {e}", exc_info=True)
         return jsonify({
             'status': 'error',
             'message': str(e)

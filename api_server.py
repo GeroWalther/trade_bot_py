@@ -87,7 +87,7 @@ def make_test_trade():
             'message': str(e)
         }), 500
 
-@app.route('/close-position/<symbol>')
+@app.route('/close-position/<symbol>', methods=['POST'])
 def close_position(symbol):
     try:
         # Get current position
