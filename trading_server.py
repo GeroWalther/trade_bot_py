@@ -592,10 +592,12 @@ def update_bot_settings(bot_id):
         settings = request.get_json()
         
         if bot_id == 'ema_strategy':
-            # Stop the strategy temporarily
-            was_running = ema_strategy._continue
-            if was_running:
-                ema_strategy.stop()
+            # Check if the bot is running - if so, prevent settings changes
+            if ema_strategy.should_continue():
+                return jsonify({
+                    'status': 'error', 
+                    'message': 'Cannot change settings while the bot is running. Please stop the bot first.'
+                }), 400
             
             # Update settings
             ema_strategy.parameters.update({
@@ -604,10 +606,6 @@ def update_bot_settings(bot_id):
                 'continue_after_trade': settings.get('continue_after_trade', True),
                 'max_concurrent_trades': settings.get('max_concurrent_trades', 1)
             })
-            
-            # Restart if it was running
-            if was_running:
-                ema_strategy.start()
             
             return jsonify({
                 'status': 'success',
