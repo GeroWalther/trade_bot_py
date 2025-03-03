@@ -301,6 +301,7 @@ class OandaTrader:
             price = order.get('price')
             take_profit = order.get('take_profit')
             stop_loss = order.get('stop_loss')
+            position_fill = order.get('position_fill', 'DEFAULT')
             
             # Verify market is open
             if not self.is_market_open(symbol):
@@ -313,15 +314,6 @@ class OandaTrader:
                 logging.error(f"Could not get current price for {symbol}")
                 raise Exception(f"Could not get current price for {symbol}")
             
-            # For closing positions, get the actual position quantity
-            positions = self.get_tracked_positions()
-            if symbol in positions:
-                position = positions[symbol]
-                if side == 'sell' and position['side'] == 'LONG':
-                    quantity = abs(position['quantity'])
-                elif side == 'buy' and position['side'] == 'SHORT':
-                    quantity = abs(position['quantity'])
-            
             # Convert quantity to string with proper precision
             if 'XAU' in symbol:
                 units = str(round(quantity, 3))
@@ -332,7 +324,7 @@ class OandaTrader:
             else:  # Forex
                 units = str(int(quantity))
             
-            # For sell orders or position closures, make units negative
+            # For sell orders, make units negative
             if side == 'sell':
                 units = f"-{units}"
             
@@ -343,7 +335,7 @@ class OandaTrader:
                 "order": {
                     "instrument": symbol,
                     "units": units,
-                    "positionFill": "DEFAULT"
+                    "positionFill": position_fill  # Use the provided position fill
                 }
             }
             
@@ -352,14 +344,25 @@ class OandaTrader:
                 order_data["order"]["type"] = "MARKET"
                 order_data["order"]["timeInForce"] = "FOK"
             elif order_type == 'pending':
-                # For pending orders, we use LIMIT orders
+                # For pending orders, check if it's a stop or limit order
                 if not price:
                     logging.error("Price is required for pending orders")
                     raise Exception("Price is required for pending orders")
                 
-                order_data["order"]["type"] = "LIMIT"
+                current_price = self.get_last_price(symbol)
+                if current_price is None:
+                    raise Exception(f"Could not get current price for {symbol}")
+                
+                # Determine if this should be a STOP or LIMIT order based on price and side
+                is_stop_order = (side == 'buy' and float(price) > current_price) or \
+                                (side == 'sell' and float(price) < current_price)
+                
+                order_data["order"]["type"] = "STOP" if is_stop_order else "LIMIT"
                 order_data["order"]["price"] = str(price)
                 order_data["order"]["timeInForce"] = "GTC"  # Good Till Cancelled
+                
+                logging.info(f"Order type set to {order_data['order']['type']} based on price comparison: " + \
+                            f"Current: {current_price}, Target: {price}, Side: {side}")
             
             # Add take profit if specified
             if take_profit is not None:
@@ -404,8 +407,26 @@ class OandaTrader:
             raise
 
     def cancel_order(self, order_id):
-        # Not implemented for OANDA
-        pass
+        """Cancel a pending order"""
+        try:
+            r = orders.OrderCancel(accountID=self.account_id, orderID=order_id)
+            response = self.api.request(r)
+            
+            if 'orderCancelTransaction' in response:
+                logging.info(f"Order {order_id} canceled successfully")
+                return True
+            
+            if 'errorMessage' in response:
+                error_msg = response['errorMessage']
+                logging.error(f"OANDA error canceling order: {error_msg}")
+                raise Exception(f"OANDA error: {error_msg}")
+            
+            logging.error(f"Order cancellation failed: {response}")
+            raise Exception("Order cancellation failed")
+            
+        except Exception as e:
+            logging.error(f"Error in cancel_order: {e}", exc_info=True)
+            raise
 
     def get_historical_account_value(self, timeframe="1D"):
         # Return current value as we don't track historical values
@@ -531,4 +552,48 @@ class OandaTrader:
             'history': prices,
             'change_percent': round(price_change, 3),
             'direction': price_direction
-        } 
+        }
+
+    def get_pending_orders(self):
+        """Get all pending orders"""
+        try:
+            r = orders.OrdersPending(accountID=self.account_id)
+            response = self.api.request(r)
+            
+            pending_orders = []
+            for order in response.get('orders', []):
+                # Include both LIMIT and STOP orders
+                if order['type'] not in ['LIMIT', 'STOP']:
+                    continue
+                    
+                symbol = order['instrument']
+                units = float(order['units'])
+                price = float(order['price'])
+                
+                # Get take profit and stop loss if set
+                take_profit = None
+                stop_loss = None
+                
+                if 'takeProfitOnFill' in order:
+                    take_profit = float(order['takeProfitOnFill']['price'])
+                if 'stopLossOnFill' in order:
+                    stop_loss = float(order['stopLossOnFill']['price'])
+                
+                pending_orders.append({
+                    'id': order['id'],
+                    'symbol': symbol,
+                    'side': 'buy' if units > 0 else 'sell',
+                    'quantity': abs(units),
+                    'price': price,
+                    'take_profit': take_profit,
+                    'stop_loss': stop_loss,
+                    'created_time': order['createTime'],
+                    'type': order['type'].lower()  # Add order type to response
+                })
+            
+            logging.info(f"Found pending orders: {pending_orders}")
+            return pending_orders
+            
+        except Exception as e:
+            logging.error(f"Error getting pending orders: {e}", exc_info=True)
+            return [] 

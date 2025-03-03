@@ -63,13 +63,6 @@ def execute_trade():
         
         logger.info(f"Processed request parameters: symbol={symbol}, side={side}, quantity={quantity}, order_type={order_type}, price={price}, take_profit={take_profit}, stop_loss={stop_loss}")
         
-        # Get current positions to check if we already have one
-        current_positions = broker.get_tracked_positions()
-        has_position = symbol in current_positions
-        logger.info(f"Current positions check - Has position for {symbol}: {has_position}")
-        if has_position:
-            logger.info(f"Existing position details: {current_positions[symbol]}")
-        
         # Check if market is open for this symbol
         if not broker.is_market_open(symbol):
             return jsonify({
@@ -78,16 +71,37 @@ def execute_trade():
                 'error_code': 'MARKET_HALTED'
             }), 400
         
-        order = {
-            'strategy': None,
-            'symbol': symbol,
-            'quantity': quantity,
-            'side': side,
-            'order_type': order_type,
-            'price': price,
-            'take_profit': take_profit,
-            'stop_loss': stop_loss
-        }
+        # For pending orders, we need a price
+        if order_type == 'pending':
+            if not price:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Price is required for pending orders'
+                }), 400
+                
+            order = {
+                'strategy': None,
+                'symbol': symbol,
+                'quantity': quantity,
+                'side': side,
+                'order_type': 'pending',
+                'price': price,
+                'take_profit': take_profit,
+                'stop_loss': stop_loss,
+                'position_fill': 'OPEN_ONLY'  # Prevent closing existing positions
+            }
+        else:
+            # For market orders, just submit the order
+            order = {
+                'strategy': None,
+                'symbol': symbol,
+                'quantity': quantity,
+                'side': side,
+                'order_type': 'market',
+                'take_profit': take_profit,
+                'stop_loss': stop_loss,
+                'position_fill': 'DEFAULT'  # Allow both opening and closing
+            }
         
         logger.info(f"Submitting order to broker: {order}")
         try:
@@ -111,20 +125,18 @@ def execute_trade():
             }), 400
         
         if order_id:
-            # Get updated position info
+            # For pending orders, don't expect an immediate position
+            if order_type == 'pending':
+                return jsonify({
+                    'status': 'success',
+                    'order_id': order_id,
+                    'message': 'Pending order created successfully'
+                }), 200
+            
+            # For market orders, check the position
             positions = broker.get_tracked_positions()
             position_info = positions.get(symbol, {})
             logger.info(f"Updated position info: {position_info}")
-            
-            # Check if the position was actually created
-            if not position_info and side != 'sell':  # We expect a position for buy orders
-                logger.warning(f"Order was created but no position found for {symbol}")
-                return jsonify({
-                    'status': 'warning',
-                    'order_id': order_id,
-                    'message': 'Order was processed but no position was created. This might be due to market conditions.',
-                    'position': {}
-                }), 200
             
             response = {
                 'status': 'success',
@@ -204,6 +216,9 @@ def get_trading_status():
         # Get positions
         positions = broker.get_tracked_positions()
         
+        # Get pending orders
+        pending_orders = broker.get_pending_orders()
+        
         # Define all available instruments
         instruments = [
             'EUR_USD', 'GBP_USD', 'USD_JPY', 'AUD_USD', 'USD_CAD', 'BTC_USD',
@@ -226,6 +241,7 @@ def get_trading_status():
                 'total_value': total_value
             },
             'positions': positions,
+            'pending_orders': pending_orders,
             'market_prices': market_prices,
             'market_status': {
                 'is_market_open': broker.is_market_open(),
@@ -573,6 +589,26 @@ async def get_market_intelligence():
     except Exception as e:
         return jsonify({
             'error': True,
+            'message': str(e)
+        }), 500
+
+@app.route('/cancel-order/<order_id>', methods=['POST'])
+def cancel_order(order_id):
+    try:
+        logger.info(f"Canceling order: {order_id}")
+        
+        # Cancel the order using the broker
+        broker.cancel_order(order_id)
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Order canceled successfully'
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error canceling order: {e}", exc_info=True)
+        return jsonify({
+            'status': 'error',
             'message': str(e)
         }), 500
 
