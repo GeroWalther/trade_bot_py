@@ -636,3 +636,43 @@ class OandaTrader:
         except Exception as e:
             logging.error(f"Error getting pending orders: {e}", exc_info=True)
             return [] 
+
+    def get_open_trades(self):
+        """Get all open trades with take profit and stop loss information"""
+        try:
+            # Get all open trades
+            r_trades = trades.OpenTrades(accountID=self.account_id)
+            trades_response = self.api.request(r_trades)
+            logging.info(f"OANDA trades response: {trades_response}")
+            
+            open_trades = []
+            for trade in trades_response.get('trades', []):
+                trade_info = {
+                    'id': trade['id'],
+                    'instrument': trade['instrument'],
+                    'price': float(trade['price']),
+                    'currentUnits': float(trade['currentUnits']),
+                    'unrealizedPL': float(trade['unrealizedPL']),
+                    'state': trade['state']
+                }
+                
+                # Add take profit information if it exists
+                if 'takeProfitOrder' in trade:
+                    trade_info['takeProfitOrder'] = {
+                        'id': trade['takeProfitOrder']['id'],
+                        'price': float(trade['takeProfitOrder']['price'])
+                    }
+                
+                # Add stop loss information if it exists
+                if 'stopLossOrder' in trade:
+                    trade_info['stopLossOrder'] = {
+                        'id': trade['stopLossOrder']['id'],
+                        'price': float(trade['stopLossOrder']['price'])
+                    }
+                
+                open_trades.append(trade_info)
+            
+            return open_trades
+        except Exception as e:
+            logging.error(f"Error getting open trades: {e}", exc_info=True)
+            return [] 

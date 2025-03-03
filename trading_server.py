@@ -233,6 +233,9 @@ def get_trading_status():
         # Get pending orders
         pending_orders = broker.get_pending_orders()
         
+        # Get open trades to include take profit and stop loss information
+        trades = broker.get_open_trades()
+        
         # Define all available instruments
         instruments = [
             'EUR_USD', 'GBP_USD', 'USD_JPY', 'AUD_USD', 'USD_CAD', 'BTC_USD',
@@ -265,7 +268,8 @@ def get_trading_status():
                 'win_rate': 0,  # Add real stats here
                 'winning_trades': 0,
                 'losing_trades': 0
-            }
+            },
+            'trades': trades  # Include trades in the response
         })
         
     except Exception as e:
@@ -643,7 +647,7 @@ def modify_position():
             }), 400
             
         # Get trade details from OANDA
-        r = trades.TradeCRCDO(accountID=broker.account_id, tradeID=trade_id)
+        r = trades.TradeDetails(accountID=broker.account_id, tradeID=trade_id)
         response = broker.api.request(r)
         
         if 'trade' not in response:
@@ -655,17 +659,17 @@ def modify_position():
         trade = response['trade']
         
         # Prepare modification data
-        data = {
-            "takeProfit": {
-                "price": str(take_profit)
-            } if take_profit is not None else None,
-            "stopLoss": {
-                "price": str(stop_loss)
-            } if stop_loss is not None else None
-        }
-        
-        # Remove None values
-        data = {k: v for k, v in data.items() if v is not None}
+        data = {}
+        if take_profit is not None:
+            data["takeProfit"] = {
+                "price": str(take_profit),
+                "timeInForce": "GTC"
+            }
+        if stop_loss is not None:
+            data["stopLoss"] = {
+                "price": str(stop_loss),
+                "timeInForce": "GTC"
+            }
         
         if not data:
             return jsonify({
