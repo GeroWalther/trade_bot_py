@@ -342,6 +342,8 @@ class OandaTrader:
             stop_loss = order.get('stop_loss')
             position_fill = order.get('position_fill', 'DEFAULT')
             
+            logging.info(f"Extracted order parameters: symbol={symbol}, quantity={quantity}, side={side}, order_type={order_type}, price={price}, take_profit={take_profit}, stop_loss={stop_loss}, position_fill={position_fill}")
+            
             # Verify market is open
             if not self.is_market_open(symbol):
                 logging.error(f"Market is closed for {symbol}")
@@ -355,7 +357,12 @@ class OandaTrader:
             
             # Convert quantity to string with proper precision
             if 'XAU' in symbol:
-                units = str(round(quantity, 3))
+                # For XAU (Gold), OANDA requires units to be multiples of 1 (whole numbers)
+                # Make sure we're using a valid quantity
+                if quantity < 1:
+                    quantity = 1  # Minimum quantity for XAU
+                units = str(int(quantity))
+                logging.info(f"XAU_USD detected: Converting quantity {quantity} to whole number: {units}")
             elif 'BTC' in symbol:
                 units = str(round(quantity, 8))
             elif 'SPX' in symbol or 'NAS' in symbol:
@@ -408,12 +415,18 @@ class OandaTrader:
                 order_data["order"]["takeProfitOnFill"] = {
                     "price": str(take_profit)
                 }
+                logging.info(f"Adding take profit to order: {take_profit} (type: {type(take_profit)})")
+            else:
+                logging.info(f"No take profit specified for order (value: {take_profit}, type: {type(take_profit) if take_profit is not None else 'None'})")
             
             # Add stop loss if specified
             if stop_loss is not None:
                 order_data["order"]["stopLossOnFill"] = {
                     "price": str(stop_loss)
                 }
+                logging.info(f"Adding stop loss to order: {stop_loss} (type: {type(stop_loss)})")
+            else:
+                logging.info(f"No stop loss specified for order (value: {stop_loss}, type: {type(stop_loss) if stop_loss is not None else 'None'})")
             
             logging.info(f"OANDA order data: {order_data}")
             
@@ -584,7 +597,6 @@ class OandaTrader:
         price_direction = 'neutral'
         if len(prices) > 1:
             price_change = ((current_price - prices[0]['price']) / prices[0]['price']) * 100
-            price_direction = 'up' if price_change > 0 else 'down' if price_change < 0 else 'neutral'
 
         return {
             'current': current_price,

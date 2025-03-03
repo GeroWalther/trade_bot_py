@@ -37,7 +37,8 @@ try:
         'continue_after_trade': True,
         'max_concurrent_trades': 1,
         'trading_term': 'Day trade',
-        'risk_level': 'conservative'
+        'risk_level': 'conservative',
+        'risk_percent': 2  # Default to 2% risk per trade
     })
     
     logger.info("Successfully initialized strategies")
@@ -66,6 +67,7 @@ def execute_trade():
         
         # Check if market is open for this symbol
         if not broker.is_market_open(symbol):
+            logger.error(f"Market is closed for {symbol}")
             return jsonify({
                 'status': 'error',
                 'message': f'Market is closed for {symbol}',
@@ -75,6 +77,7 @@ def execute_trade():
         # For pending orders, we need a price
         if order_type == 'pending':
             if not price:
+                logger.error("Price is required for pending orders")
                 return jsonify({
                     'status': 'error',
                     'message': 'Price is required for pending orders'
@@ -340,7 +343,7 @@ def get_bots():
     # Check if strategies exist
     logger.info(f"EMA Strategy exists: {ema_strategy is not None}")
     logger.info(f"BB Strategy exists: {bb_strategy is not None}")
-    logger.info(f"AI Gold Strategy exists: {ai_gold_strategy is not None}")
+    logger.info(f"AI Strategy exists: {ai_gold_strategy is not None}")
     
     response = {
         'status': 'success',
@@ -358,7 +361,7 @@ def get_bots():
                 'status': bb_strategy.get_status() if bb_strategy else {}
             },
             'ai_gold_strategy': {
-                'name': 'AI Gold Strategy',
+                'name': 'AI Strategy',
                 'running': ai_gold_strategy.should_continue() if ai_gold_strategy else False,
                 'parameters': ai_gold_strategy.parameters if ai_gold_strategy else {},
                 'status': ai_gold_strategy.get_status() if ai_gold_strategy else {}
@@ -425,8 +428,18 @@ def toggle_bot(bot_id):
             was_running = ai_gold_strategy.should_continue()
             if was_running:
                 ai_gold_strategy.stop()
+                # Clear analysis data when stopping
+                ai_gold_strategy.ai_analysis = None
+                ai_gold_strategy.last_analysis_time = None
+                ai_gold_strategy.current_trade = None
+                logger.info("Cleared AI strategy data after stopping")
                 new_status = 'stopped'
             else:
+                # Always get a fresh analysis when starting
+                ai_gold_strategy.ai_analysis = None
+                ai_gold_strategy.last_analysis_time = None
+                ai_gold_strategy.current_symbol = ai_gold_strategy.parameters['symbol']
+                logger.info("Starting AI strategy with fresh analysis")
                 start_strategy(ai_gold_strategy)
                 new_status = 'running'
             
@@ -465,8 +478,21 @@ def update_bot_parameters(bot_id):
         else:
             return jsonify({'status': 'error', 'message': f'Bot {bot_id} not found'}), 404
         
+        # Check if the bot is running - if so, prevent parameter changes
+        if strategy_instance.should_continue():
+            return jsonify({
+                'status': 'error', 
+                'message': 'Cannot change parameters while the bot is running. Please stop the bot first.'
+            }), 400
+        
         # Get the current parameters
         current_params = strategy_instance.parameters.copy()
+        
+        # Check if symbol is changing for AI strategy
+        symbol_changed = False
+        if bot_id == 'ai_gold_strategy' and 'symbol' in data and data['symbol'] != current_params.get('symbol'):
+            symbol_changed = True
+            logger.info(f"Symbol changing from {current_params.get('symbol')} to {data['symbol']}")
         
         # Update parameters
         for key, value in data.items():
@@ -486,6 +512,15 @@ def update_bot_parameters(bot_id):
         
         # Update the strategy parameters
         strategy_instance.parameters = current_params
+        
+        # For AI strategy, if symbol changed, force a new analysis on next check
+        if symbol_changed:
+            logger.info(f"Symbol changed, forcing new analysis on next check")
+            # Clear the current analysis data
+            if hasattr(strategy_instance, 'ai_analysis'):
+                strategy_instance.ai_analysis = None
+                strategy_instance.last_analysis_time = None
+                strategy_instance.current_symbol = current_params['symbol']
         
         logger.info(f"Updated parameters for {bot_id}: {current_params}")
         return jsonify({'status': 'success', 'message': 'Parameters updated', 'parameters': current_params})
@@ -694,6 +729,159 @@ def modify_position():
         
     except Exception as e:
         logger.error(f"Error modifying position: {e}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/test-trade', methods=['GET'])
+def test_trade():
+    """Test endpoint to execute a trade with specific stop loss and take profit values"""
+    try:
+        # Parameters for the Nasdaq SHORT trade with realistic price levels
+        symbol = 'NAS100_USD'
+        side = 'sell'
+        quantity = 0.1
+        take_profit = 20500.0  # Realistic take profit for Nasdaq
+        stop_loss = 21100.0    # Realistic stop loss for Nasdaq
+        
+        logger.info(f"Executing test trade: {symbol} {side} {quantity} with TP={take_profit} and SL={stop_loss}")
+        
+        # Create order
+        order = {
+            'strategy': None,
+            'symbol': symbol,
+            'quantity': quantity,
+            'side': side,
+            'order_type': 'market',
+            'take_profit': take_profit,
+            'stop_loss': stop_loss,
+            'position_fill': 'DEFAULT'
+        }
+        
+        logger.info(f"Test order details: {order}")
+        
+        # Submit the order
+        order_id = broker.submit_order(order)
+        
+        if order_id:
+            return jsonify({
+                'status': 'success',
+                'message': 'Test trade executed successfully',
+                'order_id': order_id
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': 'Test trade failed'
+            }), 400
+            
+    except Exception as e:
+        logger.error(f"Error in test trade: {e}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/reset-ai-strategy', methods=['GET'])
+def reset_ai_strategy():
+    """Reset the AI strategy by clearing its analysis data"""
+    try:
+        if not ai_gold_strategy:
+            return jsonify({
+                'status': 'error',
+                'message': 'AI Strategy not initialized'
+            }), 400
+            
+        # Stop the strategy if it's running
+        was_running = ai_gold_strategy.should_continue()
+        if was_running:
+            ai_gold_strategy.stop()
+            
+        # Reset the analysis data
+        ai_gold_strategy.ai_analysis = None
+        ai_gold_strategy.last_analysis_time = None
+        ai_gold_strategy.current_symbol = ai_gold_strategy.parameters['symbol']
+        
+        logger.info(f"Reset AI strategy analysis data for {ai_gold_strategy.parameters['symbol']}")
+        
+        # Restart if it was running
+        if was_running:
+            start_strategy(ai_gold_strategy)
+            status = 'restarted'
+        else:
+            status = 'reset'
+            
+        return jsonify({
+            'status': 'success',
+            'message': f'AI Strategy {status} successfully',
+            'symbol': ai_gold_strategy.parameters['symbol']
+        })
+            
+    except Exception as e:
+        logger.error(f"Error resetting AI strategy: {e}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/set-manual-analysis', methods=['GET'])
+def set_manual_analysis():
+    """Set manual analysis data for the AI strategy"""
+    try:
+        if not ai_gold_strategy:
+            return jsonify({
+                'status': 'error',
+                'message': 'AI Strategy not initialized'
+            }), 400
+            
+        # Get parameters from query string with defaults for Nasdaq
+        symbol = request.args.get('symbol', 'NAS100_USD')
+        direction = request.args.get('direction', 'SHORT')
+        entry_price = float(request.args.get('entry', '20888.3'))
+        take_profit = float(request.args.get('tp', '20500.0'))
+        stop_loss = float(request.args.get('sl', '21100.0'))
+        
+        # Update the strategy parameters if symbol is different
+        if symbol != ai_gold_strategy.parameters['symbol']:
+            ai_gold_strategy.parameters['symbol'] = symbol
+            ai_gold_strategy.current_symbol = symbol
+            logger.info(f"Updated AI strategy symbol to {symbol}")
+        
+        # Set the manual analysis
+        success = ai_gold_strategy.set_manual_analysis(
+            symbol=symbol,
+            direction=direction,
+            entry_price=entry_price,
+            take_profit=take_profit,
+            stop_loss=stop_loss
+        )
+        
+        if success:
+            # Make sure the strategy is running
+            if not ai_gold_strategy.should_continue():
+                start_strategy(ai_gold_strategy)
+                logger.info("Started AI strategy")
+            
+            return jsonify({
+                'status': 'success',
+                'message': 'Manual analysis set successfully',
+                'data': {
+                    'symbol': symbol,
+                    'direction': direction,
+                    'entry_price': entry_price,
+                    'take_profit': take_profit,
+                    'stop_loss': stop_loss
+                }
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': 'Failed to set manual analysis'
+            }), 400
+            
+    except Exception as e:
+        logger.error(f"Error setting manual analysis: {e}", exc_info=True)
         return jsonify({
             'status': 'error',
             'message': str(e)
