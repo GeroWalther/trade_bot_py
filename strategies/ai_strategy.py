@@ -17,7 +17,7 @@ class AIStrategy:
         self.broker = broker
         # Update available instruments to match the AI Analysis dropdown options
         self.available_instruments = [
-            'EUR_USD',  # USD/JPY in analysis
+            'EUR_USD',  # EUR/USD in analysis
             'BTC_USD',  # Bitcoin (BTC/USD) in analysis
             'SPX500_USD',  # S&P 500 in analysis
             'NAS100_USD',  # Nasdaq in analysis
@@ -26,6 +26,7 @@ class AIStrategy:
         
         # Map trading symbols to AI analysis asset names
         self.symbol_to_asset_map = {
+            'EUR_USD': 'EUR/USD',  # This maps EUR_USD to EUR/USD in the analysis
             'USD_JPY': 'USD/JPY',  # This maps USD_JPY to USD/JPY in the analysis
             'BTC_USD': 'BTCUSD',   # This maps BTC_USD to BTCUSD in the analysis
             'SPX500_USD': 'S&P500', # This maps SPX500_USD to S&P500 in the analysis
@@ -353,6 +354,16 @@ class AIStrategy:
                 current_price = float(current_price)
                 entry_price = float(entry_price)
                 
+                # Format prices with proper precision
+                current_price = self.format_price(symbol, current_price)
+                entry_price = self.format_price(symbol, entry_price)
+                
+                # Format take profit and stop loss if they exist
+                if take_profit is not None:
+                    take_profit = self.format_price(symbol, take_profit)
+                if stop_loss is not None:
+                    stop_loss = self.format_price(symbol, stop_loss)
+                
                 # Calculate price difference percentage
                 price_diff_pct = abs(current_price - entry_price) / entry_price * 100
                 
@@ -391,6 +402,7 @@ class AIStrategy:
                 self.log_status("❌ Cannot execute trade - No AI analysis available")
                 return False
                 
+            # Use the symbol from parameters - this is the correct trading symbol
             symbol = self.parameters['symbol']
             quantity = self.parameters['quantity']
             risk_percent = self.parameters.get('risk_percent', None)
@@ -458,7 +470,7 @@ class AIStrategy:
             
             # Prepare order - use the AI-recommended entry price instead of current price
             order = {
-                'symbol': symbol,
+                'symbol': symbol,  # This is the correct symbol from parameters
                 'quantity': quantity,
                 'side': side
             }
@@ -544,20 +556,14 @@ class AIStrategy:
                             # Calculate position size based on risk
                             risk_based_quantity = risk_amount / price_diff
                             
-                            # Adjust for XAU which requires whole numbers
-                            if 'XAU' in symbol:
-                                # For XAU, OANDA requires units to be at least 1
-                                risk_based_quantity = max(1, int(risk_based_quantity))
-                                self.log_status(f"🔄 Adjusted XAU quantity to whole number: {risk_based_quantity}")
-                            elif 'SPX' in symbol or 'NAS' in symbol:
-                                # For indices, round to 1 decimal place
-                                risk_based_quantity = round(risk_based_quantity, 1)
-                                # Ensure minimum quantity of 0.1
-                                risk_based_quantity = max(0.1, risk_based_quantity)
-                                self.log_status(f"🔄 Adjusted index quantity to: {risk_based_quantity}")
+                            # Format quantity according to instrument requirements
+                            risk_based_quantity = self.format_quantity(symbol, risk_based_quantity)
+                            
+                            # Log the formatted quantity
+                            self.log_status(f"🔄 Adjusted {symbol} quantity to match instrument requirements: {risk_based_quantity}")
                             
                             self.log_status(f"💹 Risk-based position sizing: {risk_percent}% risk = {risk_amount:.2f} currency units")
-                            self.log_status(f"💹 Price difference to stop loss: {price_diff:.2f}, calculated quantity: {risk_based_quantity:.2f}")
+                            self.log_status(f"💹 Price difference to stop loss: {price_diff:.2f}, calculated quantity: {risk_based_quantity}")
                             
                             # Update quantity with risk-based calculation
                             quantity = risk_based_quantity
@@ -579,16 +585,30 @@ class AIStrategy:
                 take_profit = None
                 stop_loss = None
             
-            # Add take profit and stop loss to the order if they exist
-            if take_profit is not None:
-                order['take_profit'] = take_profit
-                self.log_status(f"💰 Adding Take Profit: {take_profit:.2f}")
+            # Ensure proper quantity precision for all instruments before submitting
+            try:
+                # Apply instrument-specific precision rules using the format_quantity method
+                order['quantity'] = self.format_quantity(symbol, order['quantity'])
+                self.log_status(f"🔄 Final quantity after precision adjustment: {order['quantity']}")
+                
+                # Format entry price, take profit, and stop loss with proper precision
+                entry_price = self.format_price(symbol, entry_price)
+                if take_profit is not None:
+                    take_profit = self.format_price(symbol, take_profit)
+                    order['take_profit'] = take_profit
+                    self.log_status(f"💰 Adding Take Profit: {take_profit:.2f}")
+                if stop_loss is not None:
+                    stop_loss = self.format_price(symbol, stop_loss)
+                    order['stop_loss'] = stop_loss
+                    self.log_status(f"🛑 Adding Stop Loss: {stop_loss:.2f}")
+                
+                # Update the entry price in the order
+                if 'entry_price' in order:
+                    order['entry_price'] = entry_price
+            except Exception as e:
+                self.log_status(f"⚠️ Error adjusting precision: {str(e)}")
             
-            if stop_loss is not None:
-                order['stop_loss'] = stop_loss
-                self.log_status(f"🛑 Adding Stop Loss: {stop_loss:.2f}")
-            
-            # Log the complete order details
+            # Log the complete order details with the correct symbol
             self.log_status(f"📋 Submitting order: {order}")
             
             # Submit the order
@@ -596,10 +616,10 @@ class AIStrategy:
                 order_id = self.broker.submit_order(order)
                 
                 if order_id:
-                    # Record the trade
+                    # Record the trade with the correct symbol
                     self.current_trade = {
                         'order_id': order_id,
-                        'symbol': symbol,
+                        'symbol': symbol,  # This is the correct symbol from parameters
                         'quantity': quantity,
                         'entry_price': entry_price,  # Use AI-recommended entry price
                         'entry_time': self.broker.get_time(),
@@ -674,11 +694,17 @@ class AIStrategy:
                 current_price = float(current_price)
                 entry_price = float(entry_price)
                 
+                # Format prices with proper precision
+                current_price = self.format_price(symbol, current_price)
+                entry_price = self.format_price(symbol, entry_price)
+                
                 # Only convert take_profit and stop_loss if they exist
                 if take_profit is not None:
                     take_profit = float(take_profit)
+                    take_profit = self.format_price(symbol, take_profit)
                 if stop_loss is not None:
                     stop_loss = float(stop_loss)
+                    stop_loss = self.format_price(symbol, stop_loss)
             except (ValueError, TypeError) as e:
                 self.log_status(f"❌ Error converting price values to float: {str(e)}")
                 return False
@@ -734,6 +760,10 @@ class AIStrategy:
                 current_price = float(current_price)
                 entry_price = float(entry_price)
                 quantity = float(quantity)
+                
+                # Format prices with proper precision
+                current_price = self.format_price(symbol, current_price)
+                entry_price = self.format_price(symbol, entry_price)
             except (ValueError, TypeError) as e:
                 self.log_status(f"❌ Error converting values to float: {str(e)}")
                 return False
@@ -834,6 +864,13 @@ class AIStrategy:
                 # Reset the analysis to force a new request
                 self.ai_analysis = None
                 self.last_analysis_time = None
+                
+                # Update the cache file path for the new symbol
+                self.cache_file = os.path.join(self.cache_dir, f"ai_strategy_{self.parameters['symbol']}_performance.pkl")
+                # Load performance data for the new symbol
+                new_performance = self.load_performance_from_cache()
+                if new_performance:
+                    self.performance = new_performance
             
             # Check if we need to get a new AI analysis
             current_time = datetime.now()
@@ -845,12 +882,12 @@ class AIStrategy:
             
             # Get new analysis if we don't have one or if it's older than 4 hours
             if not self.ai_analysis or analysis_age_hours > 4:
-                # Get the asset name for display
+                # Get the asset name for display - this is now correctly using the current symbol
                 asset_name = self.symbol_to_asset_map.get(self.parameters['symbol'], 'Gold')
                 trading_term = self.parameters['trading_term']
                 risk_level = self.parameters['risk_level']
                 
-                # Simplified log message
+                # Request new AI analysis with the correct asset name
                 self.ai_analysis = await self.get_ai_analysis()
                 if not self.ai_analysis:
                     self.log_status("❌ Failed to get AI analysis, skipping trading cycle")
@@ -903,13 +940,19 @@ class AIStrategy:
         self.log_status("🛑 Strategy stopped")
         self._continue = False
         self.clear_data()
+        # Add a clear separator in the logs to indicate the bot has stopped
+        self.log_status("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        self.log_status("🤖 Bot stopped trading. 🛑")
+        self.log_status("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
     def clear_data(self):
-        """Clear all strategy data"""
+        """Clear all strategy data except status updates"""
         self.ai_analysis = None
         self.last_analysis_time = None
         self.current_trade = None
-        self.status_updates = []
+        # Keep status updates when the bot is running
+        if not self._continue:
+            self.status_updates = []
         # Keep performance data but reset current trade data
         if hasattr(self, 'performance'):
             self.performance['current_trade'] = None
@@ -1092,3 +1135,94 @@ class AIStrategy:
         self.log_status(f"💰 Take Profit: {take_profit}, 🛑 Stop Loss: {stop_loss}")
         
         return True 
+
+    def clear_logs(self):
+        """Manually clear all status updates/logs"""
+        self.status_updates = []
+        self.log_status("🧹 Logs have been manually cleared")
+        return True 
+
+    def get_instrument_precision(self, symbol):
+        """Get the required precision for a given instrument"""
+        # Check for forex pairs first (they contain an underscore and currency codes)
+        if '_' in symbol and any(curr in symbol for curr in ['EUR', 'GBP', 'USD', 'JPY', 'AUD', 'CAD', 'CHF', 'NZD']):
+            # Make sure it's not a crypto or index that happens to have USD in the name
+            if not any(asset in symbol for asset in ['BTC', 'SPX', 'NAS', 'XAU']):
+                return 4  # 4 decimal places for forex pairs
+        
+        # Then check for specific instruments
+        if 'XAU' in symbol:
+            return 0  # Whole numbers only for Gold
+        elif 'BTC' in symbol:
+            return 2  # 2 decimal places for Bitcoin
+        elif 'SPX' in symbol or 'NAS' in symbol:
+            return 1  # 1 decimal place for indices
+        else:
+            return 2  # Default to 2 decimal places for safety
+
+    def get_price_precision(self, symbol):
+        """Get the required price precision for a given instrument"""
+        # Check for forex pairs first (they contain an underscore and currency codes)
+        if '_' in symbol and any(curr in symbol for curr in ['EUR', 'GBP', 'USD', 'JPY', 'AUD', 'CAD', 'CHF', 'NZD']):
+            # Make sure it's not a crypto or index that happens to have USD in the name
+            if not any(asset in symbol for asset in ['BTC', 'SPX', 'NAS', 'XAU']):
+                return 5  # 5 decimal places for forex pairs
+        
+        # Then check for specific instruments
+        if 'XAU' in symbol:
+            return 2  # 2 decimal places for Gold
+        elif 'BTC' in symbol:
+            return 2  # 2 decimal places for Bitcoin
+        elif 'SPX' in symbol or 'NAS' in symbol:
+            return 2  # 2 decimal places for indices
+        else:
+            return 2  # Default to 2 decimal places for safety
+
+    def format_price(self, symbol, price):
+        """Format price according to instrument precision requirements"""
+        try:
+            precision = self.get_price_precision(symbol)
+            
+            # For decimal precision instruments
+            formatted_price = round(float(price), precision)
+            
+            return formatted_price
+        except Exception as e:
+            self.log_status(f"⚠️ Error formatting price: {str(e)}")
+            # Return original price as fallback
+            return price
+
+    def get_min_quantity(self, symbol):
+        """Get the minimum allowed quantity for a given instrument"""
+        if 'XAU' in symbol:
+            return 1  # Minimum 1 unit for Gold
+        elif 'BTC' in symbol:
+            return 0.01  # Minimum 0.01 for Bitcoin
+        elif 'SPX' in symbol or 'NAS' in symbol:
+            return 0.1  # Minimum 0.1 for indices
+        elif '_' in symbol and any(curr in symbol for curr in ['EUR', 'GBP', 'USD', 'JPY', 'AUD', 'CAD', 'CHF', 'NZD']):
+            return 1  # Minimum 1 unit for forex pairs
+        else:
+            return 0.01  # Default minimum
+
+    def format_quantity(self, symbol, quantity):
+        """Format quantity according to instrument precision requirements"""
+        try:
+            precision = self.get_instrument_precision(symbol)
+            min_quantity = self.get_min_quantity(symbol)
+            
+            if precision == 0:
+                # For whole number instruments like XAU
+                formatted_quantity = int(quantity)
+            else:
+                # For decimal precision instruments
+                formatted_quantity = round(float(quantity), precision)
+            
+            # Ensure minimum quantity
+            formatted_quantity = max(min_quantity, formatted_quantity)
+            
+            return formatted_quantity
+        except Exception as e:
+            self.log_status(f"⚠️ Error formatting quantity: {str(e)}")
+            # Return original quantity as fallback
+            return quantity 

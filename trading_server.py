@@ -427,12 +427,9 @@ def toggle_bot(bot_id):
                 
             was_running = ai_gold_strategy.should_continue()
             if was_running:
+                # Stop the bot - this will call the stop() method which now handles clearing data properly
                 ai_gold_strategy.stop()
-                # Clear analysis data when stopping
-                ai_gold_strategy.ai_analysis = None
-                ai_gold_strategy.last_analysis_time = None
-                ai_gold_strategy.current_trade = None
-                logger.info("Cleared AI strategy data after stopping")
+                logger.info("AI strategy stopped")
                 new_status = 'stopped'
             else:
                 # Always get a fresh analysis when starting
@@ -880,6 +877,48 @@ def set_manual_analysis():
             
     except Exception as e:
         logger.error(f"Error setting manual analysis: {e}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/api/bots/<bot_id>/clear-logs', methods=['POST'])
+def clear_bot_logs(bot_id):
+    try:
+        if bot_id == 'bb_strategy':
+            if not bb_strategy:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Strategy not initialized'
+                }), 400
+                
+            bb_strategy.clear_logs()
+            
+        elif bot_id == 'ema_strategy':
+            if not ema_strategy:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Strategy not initialized'
+                }), 400
+                
+            ema_strategy.clear_logs()
+                
+        elif bot_id == 'ai_gold_strategy':
+            if not ai_gold_strategy:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Strategy not initialized'
+                }), 400
+                
+            ai_gold_strategy.clear_logs()
+            
+        return jsonify({
+            'status': 'success',
+            'message': 'Logs cleared successfully'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error clearing logs for bot {bot_id}: {str(e)}", exc_info=True)
         return jsonify({
             'status': 'error',
             'message': str(e)
