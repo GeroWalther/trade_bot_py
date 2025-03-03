@@ -87,8 +87,8 @@ async def get_news(symbol):
 
 if __name__ == '__main__':
     print("\n" + "="*50)
-    print("Starting AI Analysis server on port 5003...")
+    print("Starting AI Analysis server on port 5005...")
     print("="*50 + "\n")
     logger.info("AI Analysis server is running")
     # Set debug to False to reduce logs
-    app.run(host='0.0.0.0', port=5003, debug=False) 
+    app.run(host='0.0.0.0', port=5005, debug=False) 

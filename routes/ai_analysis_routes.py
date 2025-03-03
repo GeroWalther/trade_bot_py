@@ -59,7 +59,8 @@ async def fetch_market_data(symbol):
             "s&p500": "%5EGSPC",  # ^GSPC
             "gold": "GC%3DF",     # GC=F
             "usd/jpy": "JPY=X",   # JPY=X
-            "btcusd": "BTC-USD"   # BTC-USD
+            "btcusd": "BTC-USD",  # BTC-USD
+            "eur/usd": "EUR=X"    # EUR=X
         }
         
         symbol_lower = symbol.lower()
@@ -313,6 +314,10 @@ async def advanced_market_analysis():
             "btcusd": {
                 "yahoo": "https://finance.yahoo.com/quote/BTC-USD/",
                 "tradingview": "https://www.tradingview.com/symbols/BTCUSD/technicals/"
+            },
+            "eur/usd": {
+                "yahoo": "https://finance.yahoo.com/quote/EURUSD=X/",
+                "tradingview": "https://www.tradingview.com/symbols/EURUSD/technicals/"
             }
         }
         

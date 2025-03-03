@@ -18,6 +18,7 @@ class AIStrategy:
         # Update available instruments to match the AI Analysis dropdown options
         self.available_instruments = [
             'EUR_USD',  # EUR/USD in analysis
+            'USD_JPY',  # USD/JPY in analysis
             'BTC_USD',  # Bitcoin (BTC/USD) in analysis
             'SPX500_USD',  # S&P 500 in analysis
             'NAS100_USD',  # Nasdaq in analysis
@@ -189,7 +190,7 @@ class AIStrategy:
             self.log_status(f"🔍 Requesting AI analysis for {asset_name} ({trading_term}, {risk_level})")
             
             async with aiohttp.ClientSession() as session:
-                url = "http://localhost:5003/api/advanced-market-analysis"
+                url = "http://localhost:5005/api/advanced-market-analysis"
                 payload = {
                     "asset": asset_name,
                     "term": trading_term,

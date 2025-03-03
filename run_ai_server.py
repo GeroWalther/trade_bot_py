@@ -18,7 +18,7 @@ for logger_name in [
 
 if __name__ == "__main__":
     print("\n" + "="*60)
-    print("  STARTING AI ANALYSIS SERVER ON PORT 5003")
+    print("  STARTING AI ANALYSIS SERVER ON PORT 5005")
     print("  Press Ctrl+C to stop the server")
     print("="*60 + "\n")
     
@@ -26,4 +26,4 @@ if __name__ == "__main__":
     from ai_trade_analysis import app
     
     # Run the app with minimal output
-    app.run(host='0.0.0.0', port=5003, debug=False) 
+    app.run(host='0.0.0.0', port=5005, debug=False) 
