@@ -386,10 +386,20 @@ async def advanced_market_analysis():
         Your response MUST be a valid JSON object with this exact structure.
         
         IMPORTANT: 
-        - Make sure your price targets are realistic and close to the current market price. For swing trades, entry points should typically be within 5% of the current price.
+        - Make sure your price targets are realistic and close to the current market price. For Day trades, entry points should be extremely close (within 0.5-1%) to the current price for immediate execution. For swing trades, entry points should be within 1-3% of the current price at key technical levels. For position trades, entry points can be within 3-7% of the current price with focus on major support/resistance zones. Always prioritize high-probability technical setups over arbitrary percentage ranges.
+        - The stop loss placement and risk-reward ratio should be determined by the risk level: For Conservative risk, use tighter stop losses with a minimum risk-reward ratio of 1:1.2. For Moderate risk, allow for wider stops with a minimum risk-reward ratio of 1:1.8. For Aggressive risk, use the widest acceptable stops with a minimum risk-reward ratio of 1:2.8. Always align stop losses with key technical levels (place them below for long positions and above for short positions) while maintaining these minimum ratios for the selected risk level.
         - Include specific data points and findings from your research in your analysis.
         - Cite specific news events, economic data, or technical indicators that inform your strategy.
         - If the current price is provided in the user message, use it as a reference but still verify it with your own research.
+        
+        - CRITICAL REQUIREMENT: Entry points MUST be within the specified percentage range of the current price:
+          - Day trades: Entry MUST be within 0.5-1% of current price
+          - Swing trades: Entry MUST be within 1-3% of current price
+          - Position trades: Entry MUST be within 3-7% of current price
+        Find a reasonable entry based on technical levels within this range.
+        If you cannot find a suitable technical level within these ranges, you must still provide an entry within the specified percentage range and explain why this entry point is reasonable.
+
+        DO NOT suggest entries outside these ranges under any circumstances.
         """
 
         # Prepare user message with real-time market data
@@ -413,16 +423,16 @@ async def advanced_market_analysis():
 
         # Define trading term descriptions
         term_descriptions = {
-            "day trade": "very short-term (1-2 days)",
-            "swing trade": "short to medium-term (1-2 weeks)",
-            "position trade": "medium to long-term (1-3 months)"
+            "day trade": "very short-term (1-2 days) with entries within 0.5-1% of current price",
+            "swing trade": "short to medium-term (1-2 weeks) with entries within 1-3% of current price",
+            "position trade": "medium to long-term (1-3 months) with entries within 3-7% of current price"
         }
         
         # Define risk level descriptions
         risk_level_descriptions = {
-            "conservative": "conservative (prioritizing capital preservation with modest returns)",
-            "moderate": "moderate (balanced approach between risk and reward)",
-            "aggressive": "aggressive (higher risk tolerance for potentially higher returns)"
+            "conservative": "conservative (prioritizing capital preservation with modest returns) with a risk to reward ratio of 1:1.2",
+            "moderate": "moderate (balanced approach between risk and reward) with a risk to reward ratio of 1:1.8",
+            "aggressive": "aggressive (higher risk tolerance for potentially higher returns) with a risk to reward ratio of 1:2.8"
         }
         
         # Get descriptions based on selected options
