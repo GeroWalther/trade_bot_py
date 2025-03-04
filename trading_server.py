@@ -27,7 +27,15 @@ try:
     
     # Initialize strategies
     bb_strategy = BBStrategy(broker)
-    ema_strategy = EMATrendStrategy(broker=broker)
+    ema_strategy = EMATrendStrategy(broker=broker, parameters={
+        'symbol': 'BTC_USD',
+        'check_interval': 240,
+        'continue_after_trade': True,
+        'max_concurrent_trades': 1,
+        'take_profit_level': 0.04,  # 4% take profit level
+        'risk_percent': 0.5,  # 0.5% risk per trade for position sizing
+        'trailing_stop_loss': False
+    })
     
     # Initialize AI Gold Day Trading Strategy with conservative risk
     ai_gold_strategy = AIStrategy(broker=broker, parameters={
@@ -38,7 +46,7 @@ try:
         'max_concurrent_trades': 1,
         'trading_term': 'Day trade',
         'risk_level': 'conservative',
-        'risk_percent': 2  # Default to 2% risk per trade
+        'risk_percent': 0.5  # Default to 0.5% risk per trade
     })
     
     logger.info("Successfully initialized strategies")
@@ -430,6 +438,15 @@ def toggle_bot(bot_id):
                 # Stop the bot - this will call the stop() method which now handles clearing data properly
                 ai_gold_strategy.stop()
                 logger.info("AI strategy stopped")
+                # Add a small delay to ensure the bot is fully stopped
+                time.sleep(0.5)
+                # Double-check that the bot is actually stopped
+                if ai_gold_strategy.should_continue():
+                    logger.error("AI strategy failed to stop properly")
+                    return jsonify({
+                        'status': 'error',
+                        'message': 'Failed to stop AI strategy'
+                    }), 500
                 new_status = 'stopped'
             else:
                 # Always get a fresh analysis when starting

@@ -80,7 +80,8 @@ class AIStrategy:
             'last_update_date': datetime.now().strftime('%Y-%m-%d')
         }
         
-        self.current_trade = None
+        # Replace single current_trade with a dictionary of active trades
+        self.active_trades = {}
         self.last_analysis = None
         self._thread = None
         self.ai_analysis = None
@@ -144,30 +145,40 @@ class AIStrategy:
                     self.performance['daily_pl'] = 0.0
                     self.performance['last_update_date'] = today
                 
-                # Update real-time metrics if we have an open position
-                if self.current_trade:
-                    symbol = self.current_trade['symbol']
-                    current_price = self.broker.get_last_price(symbol)
+                # Update real-time metrics if we have open positions
+                if self.active_trades:
+                    total_unrealized_pl = 0
                     
-                    if current_price:
-                        try:
-                            # Ensure values are floats before calculations
-                            current_price = float(current_price)
-                            entry_price = float(self.current_trade['entry_price'])
-                            quantity = float(self.current_trade['quantity'])
-                            
-                            # Calculate unrealized P/L
-                            if self.current_trade['side'] == 'BUY':
-                                unrealized_pl = (current_price - entry_price) * quantity
-                            else:  # SELL
-                                unrealized_pl = (entry_price - current_price) * quantity
-                            
-                            # Update daily P/L with unrealized profit/loss
-                            # Note: This is just for display, we'll adjust when the trade is closed
-                            self.performance['unrealized_pl'] = unrealized_pl
-                        except (ValueError, TypeError) as e:
-                            logger.error(f"Error calculating unrealized P/L: {e}")
-                            # Don't update unrealized_pl if there's an error
+                    # Update each active trade
+                    for trade_id, trade in list(self.active_trades.items()):
+                        symbol = trade['symbol']
+                        current_price = self.broker.get_last_price(symbol)
+                        
+                        if current_price:
+                            try:
+                                # Ensure values are floats before calculations
+                                current_price = float(current_price)
+                                entry_price = float(trade['entry_price'])
+                                quantity = float(trade['quantity'])
+                                
+                                # Calculate unrealized P/L
+                                if trade['side'] == 'BUY':
+                                    unrealized_pl = (current_price - entry_price) * quantity
+                                else:  # SELL
+                                    unrealized_pl = (entry_price - current_price) * quantity
+                                
+                                # Update trade with unrealized P/L
+                                trade['unrealized_pl'] = unrealized_pl
+                                total_unrealized_pl += unrealized_pl
+                                
+                            except (ValueError, TypeError) as e:
+                                logger.error(f"Error calculating unrealized P/L for trade {trade_id}: {e}")
+                    
+                    # Update total unrealized P/L in performance
+                    self.performance['unrealized_pl'] = total_unrealized_pl
+                else:
+                    # No active trades, set unrealized P/L to 0
+                    self.performance['unrealized_pl'] = 0.0
                 
                 # Save performance data to cache
                 self.save_performance_to_cache()
@@ -230,13 +241,24 @@ class AIStrategy:
                 self.log_status("❌ No AI analysis available")
                 return False
                 
-            # Check if we have a current trade
-            if self.current_trade:
-                self.log_status("ℹ️ Already in a trade, skipping entry signal check")
+            # Get current positions for the symbol
+            symbol = self.parameters['symbol']
+            
+            # Get all positions from the broker
+            current_positions = self.broker.get_tracked_positions()
+            
+            # Filter positions for the current symbol
+            symbol_positions = []
+            for pos_id, pos in current_positions.items():
+                if pos['symbol'] == symbol:
+                    symbol_positions.append(pos)
+            
+            # Check if we've reached max concurrent trades
+            if len(symbol_positions) >= self.parameters['max_concurrent_trades']:
+                self.log_status(f"ℹ️ Maximum concurrent trades reached ({len(symbol_positions)}/{self.parameters['max_concurrent_trades']}), skipping entry signal check")
                 return False
                 
             # Get current price
-            symbol = self.parameters['symbol']
             current_price = self.broker.get_last_price(symbol)
             if not current_price:
                 self.log_status(f"❌ Could not get current price for {symbol}")
@@ -408,6 +430,20 @@ class AIStrategy:
             symbol = self.parameters['symbol']
             quantity = self.parameters['quantity']
             risk_percent = self.parameters.get('risk_percent', None)
+            
+            # Get current positions for the symbol
+            current_positions = self.broker.get_tracked_positions()
+            
+            # Filter positions for the current symbol
+            symbol_positions = []
+            for pos_id, pos in current_positions.items():
+                if pos['symbol'] == symbol:
+                    symbol_positions.append(pos)
+            
+            # Check if we've reached max concurrent trades
+            if len(symbol_positions) >= self.parameters['max_concurrent_trades']:
+                self.log_status(f"❌ Maximum concurrent trades reached ({len(symbol_positions)}/{self.parameters['max_concurrent_trades']}), cannot open new position")
+                return False
             
             # Get current price
             current_price = self.broker.get_last_price(symbol)
@@ -619,7 +655,7 @@ class AIStrategy:
                 
                 if order_id:
                     # Record the trade with the correct symbol
-                    self.current_trade = {
+                    new_trade = {
                         'order_id': order_id,
                         'symbol': symbol,  # This is the correct symbol from parameters
                         'quantity': quantity,
@@ -630,6 +666,9 @@ class AIStrategy:
                         'stop_loss': stop_loss,
                         'ai_analysis': self.ai_analysis
                     }
+                    
+                    # Add the trade to active trades
+                    self.active_trades[order_id] = new_trade
                     
                     # Determine the order type for the log message
                     if order.get('order_type') == 'pending':
@@ -674,143 +713,67 @@ class AIStrategy:
             return False
 
     def check_exit_conditions(self):
-        """Check if we should exit the current trade based on take profit or stop loss"""
+        """Check if we should exit any open trades"""
         try:
-            if not self.current_trade:
+            # If no active trades, nothing to check
+            if not self.active_trades:
                 return False
-                
-            symbol = self.current_trade['symbol']
-            entry_price = self.current_trade['entry_price']
-            take_profit = self.current_trade['take_profit']
-            stop_loss = self.current_trade['stop_loss']
-            side = self.current_trade['side']
             
-            # Get current price
-            current_price = self.broker.get_last_price(symbol)
-            if not current_price:
-                self.log_status(f"❌ Could not get current price for {symbol}")
-                return False
-                
-            # Ensure all values are floats before calculations
-            try:
-                current_price = float(current_price)
-                entry_price = float(entry_price)
-                
-                # Format prices with proper precision
-                current_price = self.format_price(symbol, current_price)
-                entry_price = self.format_price(symbol, entry_price)
-                
-                # Only convert take_profit and stop_loss if they exist
-                if take_profit is not None:
-                    take_profit = float(take_profit)
-                    take_profit = self.format_price(symbol, take_profit)
-                if stop_loss is not None:
-                    stop_loss = float(stop_loss)
-                    stop_loss = self.format_price(symbol, stop_loss)
-            except (ValueError, TypeError) as e:
-                self.log_status(f"❌ Error converting price values to float: {str(e)}")
-                return False
-                
-            # Calculate profit/loss
-            if side == 'BUY':
-                profit_pct = (current_price - entry_price) / entry_price * 100
-                
-                # Check if trailing stop loss is enabled
-                if self.parameters.get('trailing_stop_loss', False) and stop_loss is not None:
-                    # Calculate the initial stop loss distance
-                    initial_stop_distance = entry_price - stop_loss
-                    
-                    # Calculate the new potential stop loss based on current price
-                    new_stop_loss = current_price - initial_stop_distance
-                    
-                    # Only update stop loss if the new one is higher (better) than the current one
-                    if new_stop_loss > stop_loss:
-                        # Format the new stop loss with proper precision
-                        new_stop_loss = self.format_price(symbol, new_stop_loss)
-                        
-                        # Log the stop loss update
-                        self.log_status(f"🔄 Trailing stop loss updated: {stop_loss:.2f} → {new_stop_loss:.2f}")
-                        
-                        # Update the stop loss in the current trade
-                        self.current_trade['stop_loss'] = new_stop_loss
-                        stop_loss = new_stop_loss
-                        
-                        # Update the stop loss in the broker if possible
-                        try:
-                            if 'order_id' in self.current_trade:
-                                # Use the modify_position endpoint to update the stop loss
-                                response = requests.post(
-                                    f"{self.broker.api_url}/modify-position",
-                                    json={
-                                        'trade_id': self.current_trade['order_id'],
-                                        'stop_loss': stop_loss
-                                    }
-                                )
-                                if response.status_code == 200:
-                                    self.log_status(f"✅ Stop loss successfully updated at broker")
-                                else:
-                                    self.log_status(f"⚠️ Failed to update stop loss at broker: {response.text}")
-                        except Exception as e:
-                            self.log_status(f"⚠️ Error updating stop loss at broker: {str(e)}")
-                
-                # Exit if price reaches take profit or falls below stop loss
-                if take_profit is not None and current_price >= take_profit:
-                    self.log_status(f"🎯 Take profit reached: {current_price:.2f} >= {take_profit:.2f}")
-                    return True
-                elif stop_loss is not None and current_price <= stop_loss:
-                    self.log_status(f"🛑 Stop loss triggered: {current_price:.2f} <= {stop_loss:.2f}")
-                    return True
-            else:  # SELL
-                profit_pct = (entry_price - current_price) / entry_price * 100
-                
-                # Check if trailing stop loss is enabled
-                if self.parameters.get('trailing_stop_loss', False) and stop_loss is not None:
-                    # Calculate the initial stop loss distance
-                    initial_stop_distance = stop_loss - entry_price
-                    
-                    # Calculate the new potential stop loss based on current price
-                    new_stop_loss = current_price + initial_stop_distance
-                    
-                    # Only update stop loss if the new one is lower (better) than the current one
-                    if new_stop_loss < stop_loss:
-                        # Format the new stop loss with proper precision
-                        new_stop_loss = self.format_price(symbol, new_stop_loss)
-                        
-                        # Log the stop loss update
-                        self.log_status(f"🔄 Trailing stop loss updated: {stop_loss:.2f} → {new_stop_loss:.2f}")
-                        
-                        # Update the stop loss in the current trade
-                        self.current_trade['stop_loss'] = new_stop_loss
-                        stop_loss = new_stop_loss
-                        
-                        # Update the stop loss in the broker if possible
-                        try:
-                            if 'order_id' in self.current_trade:
-                                # Use the modify_position endpoint to update the stop loss
-                                response = requests.post(
-                                    f"{self.broker.api_url}/modify-position",
-                                    json={
-                                        'trade_id': self.current_trade['order_id'],
-                                        'stop_loss': stop_loss
-                                    }
-                                )
-                                if response.status_code == 200:
-                                    self.log_status(f"✅ Stop loss successfully updated at broker")
-                                else:
-                                    self.log_status(f"⚠️ Failed to update stop loss at broker: {response.text}")
-                        except Exception as e:
-                            self.log_status(f"⚠️ Error updating stop loss at broker: {str(e)}")
-                
-                # Exit if price falls below take profit or rises above stop loss
-                if take_profit is not None and current_price <= take_profit:
-                    self.log_status(f"🎯 Take profit reached: {current_price:.2f} <= {take_profit:.2f}")
-                    return True
-                elif stop_loss is not None and current_price >= stop_loss:
-                    self.log_status(f"🛑 Stop loss triggered: {current_price:.2f} >= {stop_loss:.2f}")
-                    return True
+            # Track trades to exit
+            trades_to_exit = []
             
-            # Log current position status
-            self.log_status(f"📊 Position update: Entry: {entry_price:.2f}, Current: {current_price:.2f}, P/L: {profit_pct:.2f}%")
+            # Check each active trade
+            for trade_id, trade in self.active_trades.items():
+                symbol = trade['symbol']
+                current_price = self.broker.get_last_price(symbol)
+                
+                if not current_price:
+                    self.log_status(f"❌ Could not get current price for {symbol}, skipping exit check")
+                    continue
+                
+                # Ensure current_price is a float
+                try:
+                    current_price = float(current_price)
+                except (ValueError, TypeError):
+                    self.log_status(f"❌ Invalid current price format: {current_price}")
+                    continue
+                
+                # Get trade details
+                entry_price = trade['entry_price']
+                side = trade['side']
+                take_profit = trade.get('take_profit')
+                stop_loss = trade.get('stop_loss')
+                
+                # Check if we should exit based on take profit or stop loss
+                should_exit = False
+                exit_reason = ""
+                
+                if side == 'BUY':
+                    # For long positions
+                    if take_profit and current_price >= take_profit:
+                        should_exit = True
+                        exit_reason = f"Take profit reached: {current_price:.2f} >= {take_profit:.2f}"
+                    elif stop_loss and current_price <= stop_loss:
+                        should_exit = True
+                        exit_reason = f"Stop loss triggered: {current_price:.2f} <= {stop_loss:.2f}"
+                else:  # SELL
+                    # For short positions
+                    if take_profit and current_price <= take_profit:
+                        should_exit = True
+                        exit_reason = f"Take profit reached: {current_price:.2f} <= {take_profit:.2f}"
+                    elif stop_loss and current_price >= stop_loss:
+                        should_exit = True
+                        exit_reason = f"Stop loss triggered: {current_price:.2f} >= {stop_loss:.2f}"
+                
+                # If we should exit this trade, add it to the list
+                if should_exit:
+                    trades_to_exit.append((trade_id, exit_reason))
+            
+            # If we have trades to exit, log and return True
+            if trades_to_exit:
+                for trade_id, reason in trades_to_exit:
+                    self.log_status(f"🔄 Exit signal for trade {trade_id}: {reason}")
+                return True
             
             return False
             
@@ -820,94 +783,102 @@ class AIStrategy:
             return False
 
     def exit_trade(self):
-        """Exit current trade"""
+        """Exit all active trades"""
         try:
-            if not self.current_trade:
+            # If no active trades, nothing to exit
+            if not self.active_trades:
+                self.log_status("ℹ️ No active trades to exit")
                 return False
             
-            symbol = self.current_trade['symbol']
-            quantity = self.current_trade['quantity']
-            entry_price = self.current_trade['entry_price']
-            side = self.current_trade['side']
+            exit_results = []
             
-            current_price = self.broker.get_last_price(symbol)
-            if not current_price:
-                self.log_status("❌ Could not get current price for exit")
-                return False
-            
-            # Ensure values are floats before calculations
-            try:
-                current_price = float(current_price)
-                entry_price = float(entry_price)
-                quantity = float(quantity)
+            # Exit each active trade
+            for trade_id, trade in list(self.active_trades.items()):
+                symbol = trade['symbol']
+                side = trade['side']
+                quantity = trade['quantity']
+                entry_price = trade['entry_price']
+                entry_time = trade['entry_time']
                 
-                # Format prices with proper precision
-                current_price = self.format_price(symbol, current_price)
-                entry_price = self.format_price(symbol, entry_price)
-            except (ValueError, TypeError) as e:
-                self.log_status(f"❌ Error converting values to float: {str(e)}")
-                return False
-            
-            # Calculate profit/loss
-            if side == 'BUY':
-                profit_loss = (current_price - entry_price) * quantity
-                profit_pct = ((current_price - entry_price) / entry_price) * 100
-                exit_side = 'sell'
-                position_type = "Long"
-            else:
-                profit_loss = (entry_price - current_price) * quantity
-                profit_pct = ((entry_price - current_price) / entry_price) * 100
-                exit_side = 'buy'
-                position_type = "Short"
-            
-            self.log_status(
-                f"🔄 Closing {position_type} position - Entry: {entry_price:.2f}, "
-                f"Exit: {current_price:.2f}, "
-                f"P/L: {profit_loss:.2f} ({profit_pct:.2f}%)"
-            )
-            
-            order = {
-                'symbol': symbol,
-                'quantity': quantity,
-                'side': exit_side
-            }
-            
-            order_id = self.broker.submit_order(order)
-            if order_id:
-                # Record trade result
-                trade_result = {
+                # Get current price
+                current_price = self.broker.get_last_price(symbol)
+                if not current_price:
+                    self.log_status(f"❌ Could not get current price for {symbol}, cannot exit trade")
+                    continue
+                
+                # Ensure current_price is a float
+                try:
+                    current_price = float(current_price)
+                except (ValueError, TypeError):
+                    self.log_status(f"❌ Invalid current price format: {current_price}")
+                    continue
+                
+                # Calculate profit/loss
+                if side == 'BUY':
+                    profit_loss = (current_price - entry_price) * quantity
+                    profit_pct = (current_price - entry_price) / entry_price * 100
+                else:  # SELL
+                    profit_loss = (entry_price - current_price) * quantity
+                    profit_pct = (entry_price - current_price) / entry_price * 100
+                
+                # Create exit order (opposite of entry)
+                exit_side = 'sell' if side == 'BUY' else 'buy'
+                exit_order = {
                     'symbol': symbol,
-                    'entry_price': entry_price,
-                    'exit_price': current_price,
                     'quantity': quantity,
-                    'profit_loss': profit_loss,
-                    'profit_pct': profit_pct,
-                    'duration': (self.broker.get_time() - self.current_trade['entry_time']).total_seconds() / 60,
-                    'timestamp': self.broker.get_time(),
-                    'ai_analysis': self.current_trade.get('ai_analysis')
+                    'side': exit_side,
+                    'order_type': 'market'
                 }
                 
-                self.update_performance(trade_result)
-                self.trades_history.append(trade_result)
-                self.current_trade = None
-                
-                # Determine if the trade was profitable or not
-                result_emoji = "✅" if profit_loss > 0 else "❌"
-                result_text = "PROFIT" if profit_loss > 0 else "LOSS"
-                
-                self.log_status(
-                    f"{result_emoji} {position_type} position closed with {result_text} - Duration: {trade_result['duration']:.1f} minutes, "
-                    f"P/L: {profit_loss:.2f} ({profit_pct:.2f}%), "
-                    f"Total P/L: {self.performance['total_profit_loss']:.2f}"
-                )
-                return True
+                # Submit exit order
+                try:
+                    exit_order_id = self.broker.submit_order(exit_order)
+                    
+                    if exit_order_id:
+                        # Record trade result
+                        trade_result = {
+                            'symbol': symbol,
+                            'entry_price': entry_price,
+                            'exit_price': current_price,
+                            'quantity': quantity,
+                            'side': side,
+                            'entry_time': entry_time,
+                            'exit_time': self.broker.get_time(),
+                            'profit_loss': profit_loss,
+                            'profit_pct': profit_pct
+                        }
+                        
+                        # Add to trade history
+                        self.trades_history.append(trade_result)
+                        
+                        # Update performance metrics
+                        self.update_performance(trade_result)
+                        
+                        # Log exit
+                        profit_emoji = "📈" if profit_loss > 0 else "📉"
+                        self.log_status(
+                            f"{profit_emoji} Exited {side} position on {symbol} at {current_price:.2f} "
+                            f"(Entry: {entry_price:.2f}, P/L: {profit_loss:.2f} EUR, {profit_pct:.2f}%)"
+                        )
+                        
+                        # Remove from active trades
+                        del self.active_trades[trade_id]
+                        
+                        exit_results.append(True)
+                    else:
+                        self.log_status(f"❌ Failed to exit trade {trade_id}")
+                        exit_results.append(False)
+                        
+                except Exception as e:
+                    self.log_status(f"❌ Error exiting trade {trade_id}: {str(e)}")
+                    exit_results.append(False)
             
-            self.log_status("❌ Failed to close position")
-            return False
+            # Return True if all trades were exited successfully
+            return all(exit_results) if exit_results else False
             
         except Exception as e:
-            self.log_status(f"❌ Error exiting trade: {str(e)}")
-            logger.error(f"Error exiting trade: {e}", exc_info=True)
+            self.log_status(f"❌ Error exiting trades: {str(e)}")
+            logger.error(f"Error exiting trades: {e}", exc_info=True)
             return False
 
     def run(self):
@@ -974,9 +945,22 @@ class AIStrategy:
                     self.log_status("❌ Failed to get AI analysis, skipping trading cycle")
                     return
             
-            # Check if we have an open position
-            if self.current_trade:
-                # Check if we should exit the trade
+            # Get current positions from the broker
+            current_positions = self.broker.get_tracked_positions()
+            
+            # Filter positions for the current symbol
+            symbol = self.parameters['symbol']
+            symbol_positions = []
+            for pos_id, pos in current_positions.items():
+                if pos['symbol'] == symbol:
+                    symbol_positions.append(pos)
+            
+            # Log the number of active positions
+            self.log_status(f"ℹ️ Current active positions for {symbol}: {len(symbol_positions)}/{self.parameters['max_concurrent_trades']}")
+            
+            # Check if we have any active trades to exit
+            if self.active_trades:
+                # Check if we should exit any trades
                 if self.check_exit_conditions():
                     self.exit_trade()
                     
@@ -988,11 +972,15 @@ class AIStrategy:
                         self.ai_analysis = None
                         self.last_analysis_time = None
                         return
-            else:
+            
+            # Check if we can enter a new trade (if we haven't reached max_concurrent_trades)
+            if len(symbol_positions) < self.parameters['max_concurrent_trades']:
                 # Check if we should enter a trade
                 if self.should_enter_trade():
                     self.execute_trade()
                     # The execute_trade method now handles stopping if Continue After Trade is No
+            else:
+                self.log_status(f"ℹ️ Maximum concurrent trades reached ({len(symbol_positions)}/{self.parameters['max_concurrent_trades']}), waiting for positions to close")
 
         except Exception as e:
             self.log_status(f"❌ Error in trading logic: {str(e)}")
@@ -1019,18 +1007,26 @@ class AIStrategy:
             return
             
         self.log_status("🛑 Strategy stopped")
+        # Set the continue flag to False first
         self._continue = False
+        # Log that we're stopping the strategy
+        logger.info("AI Strategy stopping - setting _continue to False")
+        # Clear data but don't clear logs
         self.clear_data()
         # Add a clear separator in the logs to indicate the bot has stopped
         self.log_status("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        self.log_status("🤖 Bot stopped trading. 🛑")
-        self.log_status("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        # Log that the strategy has been stopped
+        logger.info("AI Strategy has been stopped")
+        # Double-check that the continue flag is False
+        if self._continue:
+            logger.error("Failed to set _continue to False")
+            self._continue = False
 
     def clear_data(self):
         """Clear all strategy data except status updates"""
         self.ai_analysis = None
         self.last_analysis_time = None
-        self.current_trade = None
+        self.active_trades = {}  # Clear all active trades
         # Never clear status updates
         # if not self._continue:
         #     self.status_updates = []
@@ -1058,32 +1054,34 @@ class AIStrategy:
                 "Follows AI-recommended direction (LONG/SHORT)",
                 "Uses AI-recommended entry, take profit, and stop loss levels",
                 "Refreshes analysis every 4 hours",
-                "Monitors positions for take profit and stop loss conditions"
+                "Monitors positions for take profit and stop loss conditions",
+                f"Manages up to {self.parameters['max_concurrent_trades']} concurrent trades"
             ]
         }
         
-        # Get current position info if we have one
-        current_position = None
-        if self.current_trade:
-            symbol = self.current_trade['symbol']
+        # Get current positions info
+        current_positions = []
+        for trade_id, trade in self.active_trades.items():
+            symbol = trade['symbol']
             current_price = self.broker.get_last_price(symbol)
             
             if current_price:
-                entry_price = self.current_trade['entry_price']
-                if self.current_trade['side'] == 'BUY':
+                entry_price = trade['entry_price']
+                if trade['side'] == 'BUY':
                     profit_pct = (current_price - entry_price) / entry_price * 100
                 else:
                     profit_pct = (entry_price - current_price) / entry_price * 100
                     
-                current_position = {
+                current_positions.append({
+                    'trade_id': trade_id,
                     'symbol': symbol,
-                    'side': self.current_trade['side'],
+                    'side': trade['side'],
                     'entry_price': entry_price,
                     'current_price': current_price,
                     'profit_pct': profit_pct,
-                    'take_profit': self.current_trade['take_profit'],
-                    'stop_loss': self.current_trade['stop_loss']
-                }
+                    'take_profit': trade['take_profit'],
+                    'stop_loss': trade['stop_loss']
+                })
         
         # Calculate win rate
         win_rate = 0.0
@@ -1103,7 +1101,8 @@ class AIStrategy:
             'performance': performance_data,
             'recent_updates': self.status_updates,
             'available_instruments': self.available_instruments,
-            'current_trade': current_position,
+            'active_trades': current_positions,
+            'active_trades_count': len(current_positions),
             'strategy_info': strategy_info,
             'last_analysis_time': self.last_analysis_time.strftime('%Y-%m-%d %H:%M:%S') if self.last_analysis_time else None
         }

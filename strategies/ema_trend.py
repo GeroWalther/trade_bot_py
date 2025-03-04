@@ -22,14 +22,14 @@ class EMATrendStrategy:
         # Default parameters - make a deep copy to avoid reference issues
         self.parameters = {
             'symbol': 'BTC_USD',
-            'quantity': 0.1,
+            'quantity': 0.1,  # This will be used as a fallback/minimum
             'ema_period': 50,
             'check_interval': 240,
             'continue_after_trade': True,
             'max_concurrent_trades': 1,
             'trailing_stop_loss': False,  # Whether to use trailing stop loss
-            'risk_level': 0.02,  # Default risk level (2%)
-            'take_profit_level': 0.04  # Default take profit level (4%)
+            'take_profit_level': 0.04,  # Default take profit level (4%)
+            'risk_percent': 0.5,  # Default risk percent per trade (0.5%)
         }
         
         # Update with provided parameters if any
@@ -123,8 +123,9 @@ class EMATrendStrategy:
             if not price_action:
                 return False
                 
-            # Simple trend following - enter on uptrend
-            return price_action['trend'] == "UP"
+            # Always enter a trade regardless of trend direction
+            # We'll determine if it's a LONG or SHORT in execute_trade
+            return True
             
         except Exception as e:
             logger.error(f"Error in should_enter_trade: {e}")
@@ -167,7 +168,10 @@ class EMATrendStrategy:
         try:
             logger.info("Starting execute_trade...")
             symbol = self.parameters['symbol']
-            quantity = self.parameters['quantity']
+            
+            # Calculate position size based on risk percent
+            risk_percent = self.parameters.get('risk_percent', 0.5)  # Default to 0.5% if not specified
+            account_balance = self.broker._cash
             
             # Get current price and EMA
             price_action = self.get_price_action(symbol)
@@ -185,21 +189,53 @@ class EMATrendStrategy:
             if current_price > ema_value:
                 side = 'buy'
                 self.log_status(f"🚀 Price ({current_price:.5f}) above EMA ({ema_value:.5f}) - Going LONG")
-                # Calculate stop loss and take profit for BUY
-                raw_stop_loss = current_price * (1 - self.parameters['risk_level'])
+                
+                # Use EMA as stop loss for BUY (with small buffer)
+                buffer = ema_value * 0.001  # 0.1% buffer below EMA
+                raw_stop_loss = ema_value - buffer
                 raw_take_profit = current_price * (1 + self.parameters['take_profit_level'])
+                
+                # Calculate position size based on risk
+                risk_amount = (account_balance * risk_percent / 100)
+                stop_loss_distance = current_price - raw_stop_loss
+                if stop_loss_distance <= 0:
+                    self.log_status(f"❌ Invalid stop loss distance: {stop_loss_distance}")
+                    return False
+                quantity = risk_amount / stop_loss_distance
+                
                 # Format prices according to instrument precision
                 stop_loss = self.format_price(symbol, raw_stop_loss)
                 take_profit = self.format_price(symbol, raw_take_profit)
+                
+                self.log_status(f"🛡️ Stop Loss set at 50 EMA: {stop_loss:.5f} (Distance: {stop_loss_distance:.5f})")
             else:
                 side = 'sell'
                 self.log_status(f"🔻 Price ({current_price:.5f}) below EMA ({ema_value:.5f}) - Going SHORT")
-                # Calculate stop loss and take profit for SELL
-                raw_stop_loss = current_price * (1 + self.parameters['risk_level'])
+                
+                # Use EMA as stop loss for SELL (with small buffer)
+                buffer = ema_value * 0.001  # 0.1% buffer above EMA
+                raw_stop_loss = ema_value + buffer
                 raw_take_profit = current_price * (1 - self.parameters['take_profit_level'])
+                
+                # Calculate position size based on risk
+                risk_amount = (account_balance * risk_percent / 100)
+                stop_loss_distance = raw_stop_loss - current_price
+                if stop_loss_distance <= 0:
+                    self.log_status(f"❌ Invalid stop loss distance: {stop_loss_distance}")
+                    return False
+                quantity = risk_amount / stop_loss_distance
+                
                 # Format prices according to instrument precision
                 stop_loss = self.format_price(symbol, raw_stop_loss)
                 take_profit = self.format_price(symbol, raw_take_profit)
+                
+                self.log_status(f"🛡️ Stop Loss set at 50 EMA: {stop_loss:.5f} (Distance: {stop_loss_distance:.5f})")
+            
+            # Format quantity - don't limit by the quantity parameter
+            quantity = max(quantity, 0.01)  # Ensure minimum quantity
+            quantity = round(quantity, 2)  # Round to 2 decimal places
+            
+            self.log_status(f"💰 Risk-based position size: {quantity} (Risk: {risk_percent}%, Account: {account_balance:.2f})")
             
             logger.info(f"Submitting order: {symbol} {side} {quantity} @ {current_price}")
             logger.info(f"Stop Loss: {stop_loss}, Take Profit: {take_profit}")
@@ -231,6 +267,7 @@ class EMATrendStrategy:
                 }
                 
                 self.log_status(f"✅ Order placed successfully: ID {order_id}")
+                self.log_status(f"🔔 Position OPENED: {quantity} {symbol} @ {current_price:.5f} ({side.upper()})")
                 return True
             
             self.log_status("❌ Failed to place order")
@@ -306,13 +343,13 @@ class EMATrendStrategy:
         self.log_status(
             f"🟢 Strategy activated:\n"
             f"   Symbol: {self.parameters['symbol']}\n"
-            f"   Quantity: {self.parameters['quantity']}\n"
             f"   Check Interval: {self.parameters['check_interval']}s\n"
             f"   Continue After Trade: {'Yes' if self.parameters['continue_after_trade'] else 'No'}\n"
             f"   Max Concurrent Trades: {self.parameters['max_concurrent_trades']}\n"
             f"   Trailing Stop Loss: {'Enabled' if self.parameters['trailing_stop_loss'] else 'Disabled'}\n"
-            f"   Risk Level: {self.parameters['risk_level'] * 100}%\n"
-            f"   Take Profit Level: {self.parameters['take_profit_level'] * 100}%"
+            f"   Take Profit Level: {self.parameters['take_profit_level'] * 100}%\n"
+            f"   Risk Per Trade: {self.parameters['risk_percent']}%\n"
+            f"   Stop Loss: 50 EMA"
         )
         
         while self._continue:
@@ -404,12 +441,15 @@ class EMATrendStrategy:
         strategy_info = {
             'name': 'EMA Trend Strategy',
             'period': '50 Period EMA',
-            'description': 'Uses a 50-period Exponential Moving Average (EMA) to determine trade direction:',
+            'description': 'Uses a 50-period Exponential Moving Average (EMA) to determine trade direction and risk management:',
             'rules': [
                 'Enter LONG when price crosses above EMA',
                 'Enter SHORT when price crosses below EMA',
                 'Exit LONG when price crosses below EMA',
-                'Exit SHORT when price crosses above EMA'
+                'Exit SHORT when price crosses above EMA',
+                'Stop loss is placed at the 50 EMA level (with small buffer)',
+                'Position size is calculated based on risk percent per trade (user-configurable)',
+                'Take profit is set at a user-defined percentage from entry price'
             ]
         }
         
@@ -479,17 +519,21 @@ class EMATrendStrategy:
             logger.error(f"Current performance: {self.performance}")
 
     def check_exit_conditions(self):
-        """Check if current trade should be exited based on take profit or stop loss"""
+        """Check if current trade should be exited based on take profit, stop loss, or EMA crossover"""
         try:
             if not self.current_trade:
                 return False
             
             symbol = self.current_trade['symbol']
-            current_price = self.broker.get_last_price(symbol)
             
-            if not current_price:
-                logger.error(f"Could not get current price for {symbol}")
+            # Get current price and EMA
+            price_action = self.get_price_action(symbol)
+            if not price_action:
+                logger.error(f"Could not get price action for {symbol}")
                 return False
+                
+            current_price = price_action['current_price']
+            ema_value = price_action['ema']
             
             entry_price = self.current_trade['entry_price']
             stop_loss = self.current_trade['stop_loss']
@@ -504,6 +548,7 @@ class EMATrendStrategy:
                 f"📈 Position Update:\n"
                 f"   Entry: {entry_price:.5f}\n"
                 f"   Current: {current_price:.5f}\n"
+                f"   EMA: {ema_value:.5f}\n"
                 f"   P/L: {profit_loss:.5f} ({profit_pct:.2f}%)\n"
                 f"   Stop Loss: {stop_loss:.5f}\n"
                 f"   Take Profit: {take_profit:.5f}"
@@ -511,17 +556,16 @@ class EMATrendStrategy:
             
             # Check if trailing stop loss is enabled
             if self.parameters['trailing_stop_loss']:
-                # Calculate initial stop loss distance
+                # For trailing stop loss, we'll use the EMA as the reference
                 if side == 'buy':
-                    initial_stop_distance = entry_price - self.current_trade['initial_stop_loss']
-                    # For BUY trades, if price moves up, move stop loss up
-                    raw_new_stop = current_price - initial_stop_distance
-                    potential_new_stop = self.format_price(symbol, raw_new_stop)
+                    # For BUY trades, if price moves up, move stop loss up to just below EMA
+                    buffer = ema_value * 0.001  # 0.1% buffer below EMA
+                    potential_new_stop = self.format_price(symbol, ema_value - buffer)
                     if potential_new_stop > stop_loss:
                         # Update stop loss to new level
                         self.current_trade['stop_loss'] = potential_new_stop
-                        logger.info(f"Updated trailing stop loss to {potential_new_stop:.5f}")
-                        self.log_status(f"🔄 Trailing Stop Loss updated: {potential_new_stop:.5f}")
+                        logger.info(f"Updated trailing stop loss to {potential_new_stop:.5f} (EMA: {ema_value:.5f})")
+                        self.log_status(f"🔄 Trailing Stop Loss updated to follow EMA: {potential_new_stop:.5f}")
                         
                         # If trade has an order ID, update the stop loss with the broker
                         if 'order_id' in self.current_trade:
@@ -533,15 +577,14 @@ class EMATrendStrategy:
                             except Exception as e:
                                 logger.error(f"Error updating stop loss with broker: {e}")
                 else:  # side == 'sell'
-                    initial_stop_distance = self.current_trade['initial_stop_loss'] - entry_price
-                    # For SELL trades, if price moves down, move stop loss down
-                    raw_new_stop = current_price + initial_stop_distance
-                    potential_new_stop = self.format_price(symbol, raw_new_stop)
+                    # For SELL trades, if price moves down, move stop loss down to just above EMA
+                    buffer = ema_value * 0.001  # 0.1% buffer above EMA
+                    potential_new_stop = self.format_price(symbol, ema_value + buffer)
                     if potential_new_stop < stop_loss:
                         # Update stop loss to new level
                         self.current_trade['stop_loss'] = potential_new_stop
-                        logger.info(f"Updated trailing stop loss to {potential_new_stop:.5f}")
-                        self.log_status(f"🔄 Trailing Stop Loss updated: {potential_new_stop:.5f}")
+                        logger.info(f"Updated trailing stop loss to {potential_new_stop:.5f} (EMA: {ema_value:.5f})")
+                        self.log_status(f"🔄 Trailing Stop Loss updated to follow EMA: {potential_new_stop:.5f}")
                         
                         # If trade has an order ID, update the stop loss with the broker
                         if 'order_id' in self.current_trade:
@@ -552,6 +595,14 @@ class EMATrendStrategy:
                                 )
                             except Exception as e:
                                 logger.error(f"Error updating stop loss with broker: {e}")
+            
+            # Check if price crossed the EMA in the opposite direction
+            if side == 'buy' and current_price < ema_value:
+                self.log_status(f"🔄 EMA Crossover: Price ({current_price:.5f}) crossed below EMA ({ema_value:.5f}) - Exiting LONG position")
+                return self.exit_trade()
+            elif side == 'sell' and current_price > ema_value:
+                self.log_status(f"🔄 EMA Crossover: Price ({current_price:.5f}) crossed above EMA ({ema_value:.5f}) - Exiting SHORT position")
+                return self.exit_trade()
             
             # Check if price hit stop loss or take profit
             if side == 'buy':
@@ -627,15 +678,20 @@ class EMATrendStrategy:
                 self.log_status(f"Maximum trades reached ({len(symbol_positions)}). Waiting for positions to close.")
                 return
             
-            # Execute trade immediately based on EMA position
-            logger.info("About to execute trade...")
-            self.log_status("💡 Executing trade based on EMA position")
-            result = self.execute_trade()
-            logger.info(f"Trade execution result: {result}")
+            # Check if we should enter a trade based on EMA signal
+            should_trade = self.should_enter_trade(symbol)
+            logger.info(f"Should enter trade based on EMA signal: {should_trade}")
+            
+            if should_trade:
+                # Execute trade immediately based on EMA position
+                logger.info("About to execute trade...")
+                self.log_status("💡 Executing trade based on EMA position")
+                result = self.execute_trade()
+                logger.info(f"Trade execution result: {result}")
+            else:
+                self.log_status("⏳ Waiting for EMA signal to enter trade")
             
         except Exception as e:
-            logger.error(f"Detailed error in check_and_trade: {str(e)}")
-            logger.error(f"Current parameters state: {self.parameters}")
             self.log_status(f"❌ Error in trading logic: {str(e)}")
             logger.error(f"Trading error: {e}", exc_info=True)
 
