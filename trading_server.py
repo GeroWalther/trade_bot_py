@@ -37,7 +37,7 @@ try:
         'trailing_stop_loss': False
     })
     
-    # Initialize AI Gold Day Trading Strategy with conservative risk
+    # Initialize AI strategies for different symbols
     ai_gold_strategy = AIStrategy(broker=broker, parameters={
         'symbol': 'XAU_USD',  # Gold
         'quantity': 0.1,
@@ -46,16 +46,82 @@ try:
         'max_concurrent_trades': 1,
         'trading_term': 'Day trade',
         'risk_level': 'conservative',
-        'risk_percent': 0.5  # Default to 0.5% risk per trade
+        'risk_percent': 0.5,  # Default to 0.5% risk per trade
+        'trailing_stop_loss': False
     })
+    
+    ai_sp500_strategy = AIStrategy(broker=broker, parameters={
+        'symbol': 'SPX500_USD',  # S&P 500
+        'quantity': 0.1,
+        'check_interval': 1800,  # Check every 30 minutes
+        'continue_after_trade': True,
+        'max_concurrent_trades': 1,
+        'trading_term': 'Day trade',
+        'risk_level': 'conservative',
+        'risk_percent': 0.5,  # Default to 0.5% risk per trade
+        'trailing_stop_loss': False
+    })
+    
+    ai_btc_strategy = AIStrategy(broker=broker, parameters={
+        'symbol': 'BTC_USD',  # Bitcoin
+        'quantity': 0.1,
+        'check_interval': 1800,  # Check every 30 minutes
+        'continue_after_trade': True,
+        'max_concurrent_trades': 1,
+        'trading_term': 'Day trade',
+        'risk_level': 'conservative',
+        'risk_percent': 0.5,  # Default to 0.5% risk per trade
+        'trailing_stop_loss': False
+    })
+    
+    ai_eurusd_strategy = AIStrategy(broker=broker, parameters={
+        'symbol': 'EUR_USD',  # EUR/USD
+        'quantity': 0.1,
+        'check_interval': 1800,  # Check every 30 minutes
+        'continue_after_trade': True,
+        'max_concurrent_trades': 1,
+        'trading_term': 'Day trade',
+        'risk_level': 'conservative',
+        'risk_percent': 0.5,  # Default to 0.5% risk per trade
+        'trailing_stop_loss': False
+    })
+    
+    ai_nasdaq_strategy = AIStrategy(broker=broker, parameters={
+        'symbol': 'NAS100_USD',  # Nasdaq
+        'quantity': 0.1,
+        'check_interval': 1800,  # Check every 30 minutes
+        'continue_after_trade': True,
+        'max_concurrent_trades': 1,
+        'trading_term': 'Day trade',
+        'risk_level': 'conservative',
+        'risk_percent': 0.5,  # Default to 0.5% risk per trade
+        'trailing_stop_loss': False
+    })
+    
+    # Create a dictionary of all AI strategies for easier access
+    ai_strategies = {
+        'ai_gold_strategy': ai_gold_strategy,
+        'ai_sp500_strategy': ai_sp500_strategy,
+        'ai_btc_strategy': ai_btc_strategy,
+        'ai_eurusd_strategy': ai_eurusd_strategy,
+        'ai_nasdaq_strategy': ai_nasdaq_strategy
+    }
+    
+    # Initialize market intelligence service
+    market_intelligence = MarketIntelligenceService()
     
     logger.info("Successfully initialized strategies")
 except Exception as e:
-    logger.error(f"Failed to initialize broker or strategies: {e}", exc_info=True)
-    raise
-
-# Initialize the service
-market_intelligence = MarketIntelligenceService()
+    logger.error(f"Error initializing broker or strategies: {e}", exc_info=True)
+    broker = None
+    bb_strategy = None
+    ema_strategy = None
+    ai_gold_strategy = None
+    ai_sp500_strategy = None
+    ai_btc_strategy = None
+    ai_eurusd_strategy = None
+    ai_nasdaq_strategy = None
+    ai_strategies = {}
 
 @app.route('/execute-trade', methods=['POST'])
 def execute_trade():
@@ -351,7 +417,8 @@ def get_bots():
     # Check if strategies exist
     logger.info(f"EMA Strategy exists: {ema_strategy is not None}")
     logger.info(f"BB Strategy exists: {bb_strategy is not None}")
-    logger.info(f"AI Strategy exists: {ai_gold_strategy is not None}")
+    for bot_id, strategy in ai_strategies.items():
+        logger.info(f"{bot_id} Strategy exists: {strategy is not None}")
     
     response = {
         'status': 'success',
@@ -368,12 +435,12 @@ def get_bots():
                 'parameters': bb_strategy.parameters if bb_strategy else {},
                 'status': bb_strategy.get_status() if bb_strategy else {}
             },
-            'ai_gold_strategy': {
-                'name': 'AI Strategy',
-                'running': ai_gold_strategy.should_continue() if ai_gold_strategy else False,
-                'parameters': ai_gold_strategy.parameters if ai_gold_strategy else {},
-                'status': ai_gold_strategy.get_status() if ai_gold_strategy else {}
-            }
+            **{bot_id: {
+                'name': f'AI Strategy for {strategy.parameters["symbol"]}',
+                'running': strategy.should_continue() if strategy else False,
+                'parameters': strategy.parameters if strategy else {},
+                'status': strategy.get_status() if strategy else {}
+            } for bot_id, strategy in ai_strategies.items()}
         }
     }
     
@@ -426,35 +493,35 @@ def toggle_bot(bot_id):
                 start_strategy(ema_strategy)
                 new_status = 'running'
                 
-        elif bot_id == 'ai_gold_strategy':
-            if not ai_gold_strategy:
+        elif bot_id in ai_strategies:
+            strategy_instance = ai_strategies[bot_id]
+            if not strategy_instance:
                 return jsonify({
                     'status': 'error',
                     'message': 'Strategy not initialized'
                 }), 400
-                
-            was_running = ai_gold_strategy.should_continue()
+            
+            was_running = strategy_instance.should_continue()
             if was_running:
-                # Stop the bot - this will call the stop() method which now handles clearing data properly
-                ai_gold_strategy.stop()
-                logger.info("AI strategy stopped")
+                strategy_instance.stop()
+                logger.info(f"{bot_id} strategy stopped")
                 # Add a small delay to ensure the bot is fully stopped
                 time.sleep(0.5)
                 # Double-check that the bot is actually stopped
-                if ai_gold_strategy.should_continue():
-                    logger.error("AI strategy failed to stop properly")
+                if strategy_instance.should_continue():
+                    logger.error(f"{bot_id} strategy failed to stop properly")
                     return jsonify({
                         'status': 'error',
-                        'message': 'Failed to stop AI strategy'
+                        'message': 'Failed to stop strategy'
                     }), 500
                 new_status = 'stopped'
             else:
                 # Always get a fresh analysis when starting
-                ai_gold_strategy.ai_analysis = None
-                ai_gold_strategy.last_analysis_time = None
-                ai_gold_strategy.current_symbol = ai_gold_strategy.parameters['symbol']
-                logger.info("Starting AI strategy with fresh analysis")
-                start_strategy(ai_gold_strategy)
+                strategy_instance.ai_analysis = None
+                strategy_instance.last_analysis_time = None
+                strategy_instance.current_symbol = strategy_instance.parameters['symbol']
+                logger.info(f"Starting {bot_id} strategy with fresh analysis")
+                start_strategy(strategy_instance)
                 new_status = 'running'
             
         return jsonify({
@@ -485,10 +552,10 @@ def update_bot_parameters(bot_id):
             if not ema_strategy:
                 return jsonify({'status': 'error', 'message': 'EMA Strategy not initialized'}), 400
             strategy_instance = ema_strategy
-        elif bot_id == 'ai_gold_strategy':
-            if not ai_gold_strategy:
-                return jsonify({'status': 'error', 'message': 'AI Gold Strategy not initialized'}), 400
-            strategy_instance = ai_gold_strategy
+        elif bot_id in ai_strategies:
+            strategy_instance = ai_strategies[bot_id]
+            if not strategy_instance:
+                return jsonify({'status': 'error', 'message': f'{bot_id} Strategy not initialized'}), 400
         else:
             return jsonify({'status': 'error', 'message': f'Bot {bot_id} not found'}), 404
         
@@ -504,7 +571,7 @@ def update_bot_parameters(bot_id):
         
         # Check if symbol is changing for AI strategy
         symbol_changed = False
-        if bot_id == 'ai_gold_strategy' and 'symbol' in data and data['symbol'] != current_params.get('symbol'):
+        if bot_id in ai_strategies and 'symbol' in data and data['symbol'] != current_params.get('symbol'):
             symbol_changed = True
             logger.info(f"Symbol changing from {current_params.get('symbol')} to {data['symbol']}")
         
@@ -556,11 +623,13 @@ def get_bot_status(bot_id):
                 'status': 'success',
                 'data': ema_strategy.get_status()
             })
-        elif bot_id == 'ai_gold_strategy' and ai_gold_strategy:
-            return jsonify({
-                'status': 'success',
-                'data': ai_gold_strategy.get_status()
-            })
+        elif bot_id in ai_strategies:
+            strategy_instance = ai_strategies[bot_id]
+            if strategy_instance:
+                return jsonify({
+                    'status': 'success',
+                    'data': strategy_instance.get_status()
+                })
             
         logger.error(f"Bot {bot_id} not found or not initialized")
         return jsonify({
@@ -586,11 +655,10 @@ def debug_strategies():
             'running': ema_strategy.should_continue() if ema_strategy else False,
             'available_instruments': ema_strategy.available_instruments if ema_strategy else None
         },
-        'ai_gold_strategy': {
-            'initialized': ai_gold_strategy is not None,
-            'running': ai_gold_strategy.should_continue() if ai_gold_strategy else False,
-            'parameters': ai_gold_strategy.parameters if ai_gold_strategy else None
-        }
+        **{bot_id: {
+            'initialized': strategy is not None,
+            'running': strategy.should_continue() if strategy else False
+        } for bot_id, strategy in ai_strategies.items()}
     })
 
 @app.route('/')
@@ -920,14 +988,10 @@ def clear_bot_logs(bot_id):
             
         ema_strategy.clear_logs()
             
-    elif bot_id == 'ai_gold_strategy':
-        if not ai_gold_strategy:
-            return jsonify({
-                'status': 'error',
-                'message': 'Strategy not initialized'
-            }), 400
-            
-        ai_gold_strategy.clear_logs()
+    elif bot_id in ai_strategies:
+        strategy_instance = ai_strategies[bot_id]
+        if strategy_instance:
+            strategy_instance.clear_logs()
         
     return jsonify({
         'status': 'success',

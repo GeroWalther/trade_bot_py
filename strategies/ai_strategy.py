@@ -285,6 +285,9 @@ class AIStrategy:
             # Try to parse the entry price (it might be a string with commas or a range)
             try:
                 if isinstance(entry_price, str):
+                    # Remove dollar sign if present
+                    entry_price = entry_price.replace('$', '')
+                    
                     # Handle price ranges like "2890-2900", "2890 - 2900", or "2920.1 to 2940.0"
                     if "-" in entry_price or " to " in entry_price:
                         # Remove spaces around the hyphen
@@ -333,6 +336,9 @@ class AIStrategy:
             try:
                 take_profit_str = trading_strategy['take_profit_1']['price']
                 if isinstance(take_profit_str, str):
+                    # Remove dollar sign if present
+                    take_profit_str = take_profit_str.replace('$', '')
+                    
                     # Handle price ranges like "2890-2900", "2890 - 2900", or "2920.1 to 2940.0"
                     if "-" in take_profit_str or " to " in take_profit_str:
                         # Remove spaces around the hyphen
@@ -375,6 +381,9 @@ class AIStrategy:
                 
                 stop_loss_str = trading_strategy['stop_loss']['price']
                 if isinstance(stop_loss_str, str):
+                    # Remove dollar sign if present
+                    stop_loss_str = stop_loss_str.replace('$', '')
+                    
                     # Handle price ranges like "2890-2900", "2890 - 2900", or "2920.1 to 2940.0"
                     if "-" in stop_loss_str or " to " in stop_loss_str:
                         # Remove spaces around the hyphen
@@ -504,6 +513,9 @@ class AIStrategy:
             # Try to parse the entry price (it might be a string with commas or a range)
             try:
                 if isinstance(entry_price, str):
+                    # Remove dollar sign if present
+                    entry_price = entry_price.replace('$', '')
+                    
                     # Handle price ranges like "2890-2900", "2890 - 2900", or "2920.1 to 2940.0"
                     if "-" in entry_price or " to " in entry_price:
                         # Remove spaces around the hyphen
@@ -552,6 +564,9 @@ class AIStrategy:
             try:
                 take_profit_str = trading_strategy['take_profit_1']['price']
                 if isinstance(take_profit_str, str):
+                    # Remove dollar sign if present
+                    take_profit_str = take_profit_str.replace('$', '')
+                    
                     # Handle price ranges like "2890-2900", "2890 - 2900", or "2920.1 to 2940.0"
                     if "-" in take_profit_str or " to " in take_profit_str:
                         # Remove spaces around the hyphen
@@ -594,6 +609,9 @@ class AIStrategy:
                 
                 stop_loss_str = trading_strategy['stop_loss']['price']
                 if isinstance(stop_loss_str, str):
+                    # Remove dollar sign if present
+                    stop_loss_str = stop_loss_str.replace('$', '')
+                    
                     # Handle price ranges like "2890-2900", "2890 - 2900", or "2920.1 to 2940.0"
                     if "-" in stop_loss_str or " to " in stop_loss_str:
                         # Remove spaces around the hyphen
@@ -716,6 +734,11 @@ class AIStrategy:
                 self.log_status(f"ℹ️ Position counter updated: {self.active_position_count}/{self.parameters['max_concurrent_trades']} active positions")
                 
                 self.log_status(f"✅ {side} Stop Pending Order placed successfully at {entry_price}")
+                
+                # If Continue After Trade is set to No, stop the bot after placing the order
+                if not self.parameters.get('continue_after_trade', True):
+                    self.log_status("🛑 Continue After Trade is set to No, bot will stop after this trade completes")
+                
                 return True
             else:
                 self.log_status(f"❌ Failed to place order")
@@ -737,17 +760,34 @@ class AIStrategy:
             broker_positions = self.broker.get_tracked_positions()
             
             # Debug log all positions
-            self.log_status(f"🔍 DEBUG: All tracked positions: {[pos.get('id', '') for pos in broker_positions]}")
+            position_ids = []
+            for pos in broker_positions:
+                # Check if position is a dictionary before trying to access 'id'
+                if isinstance(pos, dict) and 'id' in pos:
+                    position_ids.append(pos.get('id', ''))
+                # If it's a string, it might be the position ID directly
+                elif isinstance(pos, str):
+                    position_ids.append(pos)
+            
+            self.log_status(f"🔍 DEBUG: All tracked positions: {position_ids}")
             
             # Improve position ID matching - some brokers might store the full ID, others just the number
             broker_position_ids = []
             for pos in broker_positions:
-                pos_id = pos.get('id', '')
-                # Add both the full ID and just the numeric part if it exists
-                broker_position_ids.append(pos_id)
-                # If the ID is numeric, also add it as a string
-                if pos_id.isdigit():
-                    broker_position_ids.append(int(pos_id))
+                # Check if position is a dictionary before trying to access 'id'
+                if isinstance(pos, dict) and 'id' in pos:
+                    pos_id = pos.get('id', '')
+                    # Add both the full ID and just the numeric part if it exists
+                    broker_position_ids.append(pos_id)
+                    # If the ID is numeric, also add it as a string
+                    if pos_id.isdigit():
+                        broker_position_ids.append(int(pos_id))
+                # If it's a string, it might be the position ID directly
+                elif isinstance(pos, str):
+                    broker_position_ids.append(pos)
+                    # If the ID is numeric, also add it as an integer
+                    if pos.isdigit():
+                        broker_position_ids.append(int(pos))
             
             # Get pending orders from the broker
             pending_orders = self.broker.get_pending_orders() or []
@@ -927,6 +967,11 @@ class AIStrategy:
                     # Decrement our position counter
                     self.active_position_count = max(0, self.active_position_count - 1)
                     self.log_status(f"ℹ️ Position counter updated: {self.active_position_count}/{self.parameters['max_concurrent_trades']} active positions")
+                    
+                    # If Continue After Trade is set to No and we've closed a position, stop the bot
+                    if not self.parameters.get('continue_after_trade', True):
+                        self.log_status("🛑 Continue After Trade is set to No, stopping the bot after trade completion")
+                        self.stop()
             
             # Return True if we have trades to exit (for custom exit conditions)
             return len(trades_to_exit) > 0
@@ -1060,10 +1105,6 @@ class AIStrategy:
                     if not self.parameters.get('continue_after_trade', True):
                         self.log_status("🛑 Continue After Trade is set to No, stopping the bot")
                         self.stop()
-                        # Clear analysis data
-                        self.ai_analysis = None
-                        self.last_analysis_time = None
-                        return
             
             # Check if we can enter a new trade (if we haven't reached max_concurrent_trades)
             if self.active_position_count < self.parameters['max_concurrent_trades']:
