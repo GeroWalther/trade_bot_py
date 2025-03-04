@@ -45,20 +45,27 @@ class AIStrategy:
             'max_concurrent_trades': 1,
             'trading_term': 'Day trade',  # Default trading term
             'risk_level': 'conservative',  # Default risk level
+            'trailing_stop_loss': False,  # Whether to use trailing stop loss
         }
         
         # Update with provided parameters if any
         if parameters:
             self.parameters.update(parameters)
         
-        # Track the current symbol to detect changes
+        # Initialize strategy state
+        self.ai_analysis = None
+        self.last_analysis_time = None
+        self.active_trades = {}
         self.current_symbol = self.parameters['symbol']
+        self.status_updates = []
+        self.max_status_updates = 100
+        self.performance_update_task = None
+        self.active_position_count = 0  # Add a counter for active positions
         
         logger.info(f"Final parameters after initialization: {self.parameters}")
         
         self._continue = False
         self.last_check_time = None
-        self.status_updates = []
         self.trades_history = []
         
         # Define the cache directory and file path
@@ -79,13 +86,6 @@ class AIStrategy:
             'daily_pl': 0.0,
             'last_update_date': datetime.now().strftime('%Y-%m-%d')
         }
-        
-        # Replace single current_trade with a dictionary of active trades
-        self.active_trades = {}
-        self.last_analysis = None
-        self._thread = None
-        self.ai_analysis = None
-        self.last_analysis_time = None
         
         # Start a separate thread to periodically update and save performance metrics
         self._performance_thread = threading.Thread(target=self.performance_update_loop, daemon=True)
@@ -241,16 +241,22 @@ class AIStrategy:
                 self.log_status("❌ No AI analysis available")
                 return False
                 
+            # Check if we've reached max concurrent trades using our counter
+            if self.active_position_count >= self.parameters['max_concurrent_trades']:
+                self.log_status(f"ℹ️ Maximum concurrent trades reached ({self.active_position_count}/{self.parameters['max_concurrent_trades']}), skipping entry signal check")
+                return False
+                
             # Get current positions for the symbol
             symbol = self.parameters['symbol']
             
             # Get all positions from the broker
             current_positions = self.broker.get_tracked_positions()
             
-            # Filter positions for the current symbol
+            # Filter positions for the current symbol - use improved matching logic
             symbol_positions = []
             for pos_id, pos in current_positions.items():
-                if pos['symbol'] == symbol:
+                # Check if the position ID contains the symbol or if the symbol field matches
+                if (symbol in pos_id) or (pos.get('symbol') == symbol):
                     symbol_positions.append(pos)
             
             # Check if we've reached max concurrent trades
@@ -279,25 +285,38 @@ class AIStrategy:
             # Try to parse the entry price (it might be a string with commas or a range)
             try:
                 if isinstance(entry_price, str):
-                    # Handle price ranges like "2890-2900" or "2890 - 2900"
-                    if "-" in entry_price:
+                    # Handle price ranges like "2890-2900", "2890 - 2900", or "2920.1 to 2940.0"
+                    if "-" in entry_price or " to " in entry_price:
                         # Remove spaces around the hyphen
                         entry_price_clean = entry_price.replace(" ", "")
-                        # Split by hyphen
-                        price_parts = entry_price_clean.split("-")
+                        
+                        # Handle "to" format
+                        if "to" in entry_price_clean:
+                            price_parts = entry_price_clean.split("to")
+                        else:
+                            # Split by hyphen
+                            price_parts = entry_price_clean.split("-")
+                            
                         if len(price_parts) == 2:
                             # Try to get both prices
                             try:
                                 price1 = float(price_parts[0].replace(',', ''))
                                 price2 = float(price_parts[1].replace(',', ''))
-                                # Take the middle value and round down
-                                entry_price = int((price1 + price2) / 2)
-                                # Comment out this line to avoid duplicate log message
-                                # self.log_status(f"📊 Price range detected: {entry_price_clean}, using middle value: {entry_price}")
+                                # Take the middle value and round to the same precision as the input
+                                if '.' in str(price1) or '.' in str(price2):
+                                    # Determine precision based on input
+                                    precision = max(
+                                        len(str(price1).split('.')[-1]) if '.' in str(price1) else 0,
+                                        len(str(price2).split('.')[-1]) if '.' in str(price2) else 0
+                                    )
+                                    entry_price = round((price1 + price2) / 2, precision)
+                                else:
+                                    entry_price = int((price1 + price2) / 2)
+                                self.log_status(f"📊 Price range detected: {entry_price}, using middle value: {entry_price}")
                             except (ValueError, TypeError):
                                 # If conversion fails, just use the first part
                                 entry_price = float(price_parts[0].replace(',', ''))
-                                self.log_status(f"📊 Price range detected: {entry_price_clean}, using first value: {entry_price}")
+                                self.log_status(f"📊 Price range detected: {entry_price}, using first value: {entry_price}")
                         else:
                             # Just use the first part if splitting doesn't work as expected
                             entry_price = float(price_parts[0].replace(',', ''))
@@ -314,20 +333,34 @@ class AIStrategy:
             try:
                 take_profit_str = trading_strategy['take_profit_1']['price']
                 if isinstance(take_profit_str, str):
-                    # Handle price ranges like "2890-2900" or "2890 - 2900"
-                    if "-" in take_profit_str:
+                    # Handle price ranges like "2890-2900", "2890 - 2900", or "2920.1 to 2940.0"
+                    if "-" in take_profit_str or " to " in take_profit_str:
                         # Remove spaces around the hyphen
                         tp_clean = take_profit_str.replace(" ", "")
-                        # Split by hyphen
-                        price_parts = tp_clean.split("-")
+                        
+                        # Handle "to" format
+                        if "to" in tp_clean:
+                            price_parts = tp_clean.split("to")
+                        else:
+                            # Split by hyphen
+                            price_parts = tp_clean.split("-")
+                            
                         if len(price_parts) == 2:
                             # Try to get both prices
                             try:
                                 price1 = float(price_parts[0].replace(',', ''))
                                 price2 = float(price_parts[1].replace(',', ''))
-                                # Take the middle value and round down
-                                take_profit = int((price1 + price2) / 2)
-                                self.log_status(f"📊 TP range detected: {tp_clean}, using middle value: {take_profit}")
+                                # Take the middle value and round to the same precision as the input
+                                if '.' in str(price1) or '.' in str(price2):
+                                    # Determine precision based on input
+                                    precision = max(
+                                        len(str(price1).split('.')[-1]) if '.' in str(price1) else 0,
+                                        len(str(price2).split('.')[-1]) if '.' in str(price2) else 0
+                                    )
+                                    take_profit = round((price1 + price2) / 2, precision)
+                                else:
+                                    take_profit = int((price1 + price2) / 2)
+                                self.log_status(f"📊 TP range detected: {take_profit_str}, using middle value: {take_profit}")
                             except (ValueError, TypeError):
                                 # If conversion fails, just use the first part
                                 take_profit = float(price_parts[0].replace(',', ''))
@@ -342,20 +375,34 @@ class AIStrategy:
                 
                 stop_loss_str = trading_strategy['stop_loss']['price']
                 if isinstance(stop_loss_str, str):
-                    # Handle price ranges like "2890-2900" or "2890 - 2900"
-                    if "-" in stop_loss_str:
+                    # Handle price ranges like "2890-2900", "2890 - 2900", or "2920.1 to 2940.0"
+                    if "-" in stop_loss_str or " to " in stop_loss_str:
                         # Remove spaces around the hyphen
                         sl_clean = stop_loss_str.replace(" ", "")
-                        # Split by hyphen
-                        price_parts = sl_clean.split("-")
+                        
+                        # Handle "to" format
+                        if "to" in sl_clean:
+                            price_parts = sl_clean.split("to")
+                        else:
+                            # Split by hyphen
+                            price_parts = sl_clean.split("-")
+                            
                         if len(price_parts) == 2:
                             # Try to get both prices
                             try:
                                 price1 = float(price_parts[0].replace(',', ''))
                                 price2 = float(price_parts[1].replace(',', ''))
-                                # Take the middle value and round down
-                                stop_loss = int((price1 + price2) / 2)
-                                self.log_status(f"📊 SL range detected: {sl_clean}, using middle value: {stop_loss}")
+                                # Take the middle value and round to the same precision as the input
+                                if '.' in str(price1) or '.' in str(price2):
+                                    # Determine precision based on input
+                                    precision = max(
+                                        len(str(price1).split('.')[-1]) if '.' in str(price1) else 0,
+                                        len(str(price2).split('.')[-1]) if '.' in str(price2) else 0
+                                    )
+                                    stop_loss = round((price1 + price2) / 2, precision)
+                                else:
+                                    stop_loss = int((price1 + price2) / 2)
+                                self.log_status(f"📊 SL range detected: {stop_loss_str}, using middle value: {stop_loss}")
                             except (ValueError, TypeError):
                                 # If conversion fails, just use the first part
                                 stop_loss = float(price_parts[0].replace(',', ''))
@@ -431,18 +478,9 @@ class AIStrategy:
             quantity = self.parameters['quantity']
             risk_percent = self.parameters.get('risk_percent', None)
             
-            # Get current positions for the symbol
-            current_positions = self.broker.get_tracked_positions()
-            
-            # Filter positions for the current symbol
-            symbol_positions = []
-            for pos_id, pos in current_positions.items():
-                if pos['symbol'] == symbol:
-                    symbol_positions.append(pos)
-            
-            # Check if we've reached max concurrent trades
-            if len(symbol_positions) >= self.parameters['max_concurrent_trades']:
-                self.log_status(f"❌ Maximum concurrent trades reached ({len(symbol_positions)}/{self.parameters['max_concurrent_trades']}), cannot open new position")
+            # Check if we've reached max concurrent trades using our counter
+            if self.active_position_count >= self.parameters['max_concurrent_trades']:
+                self.log_status(f"❌ Maximum concurrent trades reached ({self.active_position_count}/{self.parameters['max_concurrent_trades']}), cannot open new position")
                 return False
             
             # Get current price
@@ -461,82 +499,87 @@ class AIStrategy:
             # Get AI recommendation
             trading_strategy = self.ai_analysis['trading_strategy']
             direction = trading_strategy['direction']
+            entry_price = trading_strategy['entry']['price']
             
-            # Parse entry price from AI recommendation
+            # Try to parse the entry price (it might be a string with commas or a range)
             try:
-                entry_price_str = trading_strategy['entry']['price']
-                if isinstance(entry_price_str, str):
-                    # Handle price ranges like "2890-2900" or "2890 - 2900"
-                    if "-" in entry_price_str:
+                if isinstance(entry_price, str):
+                    # Handle price ranges like "2890-2900", "2890 - 2900", or "2920.1 to 2940.0"
+                    if "-" in entry_price or " to " in entry_price:
                         # Remove spaces around the hyphen
-                        entry_price_clean = entry_price_str.replace(" ", "")
-                        # Split by hyphen
-                        price_parts = entry_price_clean.split("-")
+                        entry_price_clean = entry_price.replace(" ", "")
+                        
+                        # Handle "to" format
+                        if "to" in entry_price_clean:
+                            price_parts = entry_price_clean.split("to")
+                        else:
+                            # Split by hyphen
+                            price_parts = entry_price_clean.split("-")
+                            
                         if len(price_parts) == 2:
                             # Try to get both prices
                             try:
                                 price1 = float(price_parts[0].replace(',', ''))
                                 price2 = float(price_parts[1].replace(',', ''))
-                                # Take the middle value and round down
-                                entry_price = int((price1 + price2) / 2)
-                                # Comment out this line to avoid duplicate log message
-                                # self.log_status(f"📊 Price range detected: {entry_price_clean}, using middle value: {entry_price}")
+                                # Take the middle value and round to the same precision as the input
+                                if '.' in str(price1) or '.' in str(price2):
+                                    # Determine precision based on input
+                                    precision = max(
+                                        len(str(price1).split('.')[-1]) if '.' in str(price1) else 0,
+                                        len(str(price2).split('.')[-1]) if '.' in str(price2) else 0
+                                    )
+                                    entry_price = round((price1 + price2) / 2, precision)
+                                else:
+                                    entry_price = int((price1 + price2) / 2)
+                                self.log_status(f"📊 Price range detected: {entry_price}, using middle value: {entry_price}")
                             except (ValueError, TypeError):
                                 # If conversion fails, just use the first part
                                 entry_price = float(price_parts[0].replace(',', ''))
-                                self.log_status(f"📊 Price range detected: {entry_price_clean}, using first value: {entry_price}")
+                                self.log_status(f"📊 Price range detected: {entry_price}, using first value: {entry_price}")
                         else:
                             # Just use the first part if splitting doesn't work as expected
                             entry_price = float(price_parts[0].replace(',', ''))
                     else:
                         # No range, just convert to float
-                        entry_price = float(entry_price_str.replace(',', ''))
+                        entry_price = float(entry_price.replace(',', ''))
                 else:
-                    entry_price = float(entry_price_str)
+                    entry_price = float(entry_price)
             except (ValueError, TypeError):
-                self.log_status(f"❌ Invalid entry price format: {trading_strategy['entry']['price']}")
+                self.log_status(f"❌ Invalid entry price format: {entry_price}")
                 return False
-            
-            # Determine trade direction
-            if direction == "LONG":
-                side = 'buy'
-            elif direction == "SHORT":
-                side = 'sell'
-            else:
-                self.log_status(f"❌ AI does not recommend a trade direction: {direction}")
-                return False
-            
-            # Prepare order - use the AI-recommended entry price instead of current price
-            order = {
-                'symbol': symbol,  # This is the correct symbol from parameters
-                'quantity': quantity,
-                'side': side
-            }
-            
-            # Always use a pending order with the AI-recommended entry price
-            order['order_type'] = 'pending'
-            order['price'] = entry_price
-            self.log_status(f"📈 Using pending order with entry price: {entry_price:.2f} (current: {current_price:.2f})")
-            
-            # Parse take profit and stop loss from AI recommendation before submitting the order
-            try:
-                take_profit = trading_strategy['take_profit_1']['price']
                 
-                if isinstance(take_profit, str):
-                    # Handle price ranges like "2890-2900" or "2890 - 2900"
-                    if "-" in take_profit:
+            # Get take profit and stop loss values
+            try:
+                take_profit_str = trading_strategy['take_profit_1']['price']
+                if isinstance(take_profit_str, str):
+                    # Handle price ranges like "2890-2900", "2890 - 2900", or "2920.1 to 2940.0"
+                    if "-" in take_profit_str or " to " in take_profit_str:
                         # Remove spaces around the hyphen
-                        tp_clean = take_profit.replace(" ", "")
-                        # Split by hyphen
-                        price_parts = tp_clean.split("-")
+                        tp_clean = take_profit_str.replace(" ", "")
+                        
+                        # Handle "to" format
+                        if "to" in tp_clean:
+                            price_parts = tp_clean.split("to")
+                        else:
+                            # Split by hyphen
+                            price_parts = tp_clean.split("-")
+                            
                         if len(price_parts) == 2:
                             # Try to get both prices
                             try:
                                 price1 = float(price_parts[0].replace(',', ''))
                                 price2 = float(price_parts[1].replace(',', ''))
-                                # Take the middle value and round down
-                                take_profit = int((price1 + price2) / 2)
-                                self.log_status(f"📊 TP range detected: {tp_clean}, using middle value: {take_profit}")
+                                # Take the middle value and round to the same precision as the input
+                                if '.' in str(price1) or '.' in str(price2):
+                                    # Determine precision based on input
+                                    precision = max(
+                                        len(str(price1).split('.')[-1]) if '.' in str(price1) else 0,
+                                        len(str(price2).split('.')[-1]) if '.' in str(price2) else 0
+                                    )
+                                    take_profit = round((price1 + price2) / 2, precision)
+                                else:
+                                    take_profit = int((price1 + price2) / 2)
+                                self.log_status(f"📊 TP range detected: {take_profit_str}, using middle value: {take_profit}")
                             except (ValueError, TypeError):
                                 # If conversion fails, just use the first part
                                 take_profit = float(price_parts[0].replace(',', ''))
@@ -545,27 +588,40 @@ class AIStrategy:
                             take_profit = float(price_parts[0].replace(',', ''))
                     else:
                         # No range, just convert to float
-                        take_profit = float(take_profit.replace(',', ''))
+                        take_profit = float(take_profit_str.replace(',', ''))
                 else:
-                    take_profit = float(take_profit)
+                    take_profit = float(take_profit_str)
                 
                 stop_loss_str = trading_strategy['stop_loss']['price']
-                
                 if isinstance(stop_loss_str, str):
-                    # Handle price ranges like "2890-2900" or "2890 - 2900"
-                    if "-" in stop_loss_str:
+                    # Handle price ranges like "2890-2900", "2890 - 2900", or "2920.1 to 2940.0"
+                    if "-" in stop_loss_str or " to " in stop_loss_str:
                         # Remove spaces around the hyphen
                         sl_clean = stop_loss_str.replace(" ", "")
-                        # Split by hyphen
-                        price_parts = sl_clean.split("-")
+                        
+                        # Handle "to" format
+                        if "to" in sl_clean:
+                            price_parts = sl_clean.split("to")
+                        else:
+                            # Split by hyphen
+                            price_parts = sl_clean.split("-")
+                            
                         if len(price_parts) == 2:
                             # Try to get both prices
                             try:
                                 price1 = float(price_parts[0].replace(',', ''))
                                 price2 = float(price_parts[1].replace(',', ''))
-                                # Take the middle value and round down
-                                stop_loss = int((price1 + price2) / 2)
-                                self.log_status(f"📊 SL range detected: {sl_clean}, using middle value: {stop_loss}")
+                                # Take the middle value and round to the same precision as the input
+                                if '.' in str(price1) or '.' in str(price2):
+                                    # Determine precision based on input
+                                    precision = max(
+                                        len(str(price1).split('.')[-1]) if '.' in str(price1) else 0,
+                                        len(str(price2).split('.')[-1]) if '.' in str(price2) else 0
+                                    )
+                                    stop_loss = round((price1 + price2) / 2, precision)
+                                else:
+                                    stop_loss = int((price1 + price2) / 2)
+                                self.log_status(f"📊 SL range detected: {stop_loss_str}, using middle value: {stop_loss}")
                             except (ValueError, TypeError):
                                 # If conversion fails, just use the first part
                                 stop_loss = float(price_parts[0].replace(',', ''))
@@ -577,153 +633,129 @@ class AIStrategy:
                         stop_loss = float(stop_loss_str.replace(',', ''))
                 else:
                     stop_loss = float(stop_loss_str)
-                    
-                # Calculate position size based on risk percentage if enabled
-                if risk_percent is not None and stop_loss is not None:
-                    try:
-                        # Get account balance
-                        cash, _, total_value = self.broker._get_balances_at_broker()
-                        
-                        # Calculate risk amount in account currency
-                        risk_amount = total_value * (risk_percent / 100)
-                        
-                        # Calculate price difference between entry and stop loss
-                        price_diff = abs(entry_price - stop_loss)
-                        
-                        if price_diff > 0:
-                            # Calculate position size based on risk
-                            risk_based_quantity = risk_amount / price_diff
-                            
-                            # Format quantity according to instrument requirements
-                            risk_based_quantity = self.format_quantity(symbol, risk_based_quantity)
-                            
-                            # Log the formatted quantity
-                            self.log_status(f"🔄 Adjusted {symbol} quantity to match instrument requirements: {risk_based_quantity}")
-                            
-                            self.log_status(f"💹 Risk-based position sizing: {risk_percent}% risk = {risk_amount:.2f} currency units")
-                            self.log_status(f"💹 Price difference to stop loss: {price_diff:.2f}, calculated quantity: {risk_based_quantity}")
-                            
-                            # Update quantity with risk-based calculation
-                            quantity = risk_based_quantity
-                            self.log_status(f"💹 Using risk-based position size: {quantity}")
-                            
-                            # Update the order quantity immediately
-                            order['quantity'] = quantity
-                        else:
-                            self.log_status("⚠️ Cannot calculate risk-based position size: Entry price and stop loss are too close")
-                    except Exception as e:
-                        self.log_status(f"⚠️ Error calculating risk-based position size: {str(e)}")
-                        self.log_status("⚠️ Using default quantity from parameters")
-                
-                # Ensure the order has the latest quantity value
-                order['quantity'] = quantity
-                
-            except (ValueError, TypeError, KeyError) as e:
-                self.log_status(f"⚠️ Could not parse take profit or stop loss values: {str(e)}, proceeding without them")
+            except (ValueError, TypeError, KeyError):
+                self.log_status("⚠️ Could not parse take profit or stop loss values, proceeding without them")
                 take_profit = None
                 stop_loss = None
             
-            # Ensure proper quantity precision for all instruments before submitting
-            try:
-                # Apply instrument-specific precision rules using the format_quantity method
-                order['quantity'] = self.format_quantity(symbol, order['quantity'])
-                self.log_status(f"🔄 Final quantity after precision adjustment: {order['quantity']}")
-                
-                # Format entry price, take profit, and stop loss with proper precision
-                entry_price = self.format_price(symbol, entry_price)
-                if take_profit is not None:
-                    take_profit = self.format_price(symbol, take_profit)
-                    order['take_profit'] = take_profit
-                    self.log_status(f"💰 Adding Take Profit: {take_profit:.2f}")
-                if stop_loss is not None:
-                    stop_loss = self.format_price(symbol, stop_loss)
-                    order['stop_loss'] = stop_loss
-                    self.log_status(f"🛑 Adding Stop Loss: {stop_loss:.2f}")
-                
-                # Update the entry price in the order
-                if 'entry_price' in order:
-                    order['entry_price'] = entry_price
-            except Exception as e:
-                self.log_status(f"⚠️ Error adjusting precision: {str(e)}")
-            
-            # Log the complete order details with the correct symbol
-            self.log_status(f"📋 Submitting order: {order}")
-            
-            # Submit the order
-            try:
-                order_id = self.broker.submit_order(order)
-                
-                if order_id:
-                    # Record the trade with the correct symbol
-                    new_trade = {
-                        'order_id': order_id,
-                        'symbol': symbol,  # This is the correct symbol from parameters
-                        'quantity': quantity,
-                        'entry_price': entry_price,  # Use AI-recommended entry price
-                        'entry_time': self.broker.get_time(),
-                        'side': side.upper(),
-                        'take_profit': take_profit,
-                        'stop_loss': stop_loss,
-                        'ai_analysis': self.ai_analysis
-                    }
-                    
-                    # Add the trade to active trades
-                    self.active_trades[order_id] = new_trade
-                    
-                    # Determine the order type for the log message
-                    if order.get('order_type') == 'pending':
-                        # For pending orders, determine if it's a limit or stop order
-                        if side == 'buy':
-                            # Buy Limit if entry price is below current price, Buy Stop if above
-                            order_type_str = "Buy Limit" if entry_price < current_price else "Buy Stop"
-                        else:  # sell
-                            # Sell Limit if entry price is above current price, Sell Stop if below
-                            order_type_str = "Sell Limit" if entry_price > current_price else "Sell Stop"
-                        
-                        self.log_status(f"✅ {order_type_str} Pending Order placed successfully at {entry_price:.2f}")
-                    else:
-                        # For market orders
-                        self.log_status(f"✅ Market Order opened successfully at {entry_price:.2f}")
-                    
-                    # If Continue After Trade is set to No, stop the bot immediately after entering a trade
-                    if not self.parameters.get('continue_after_trade', True):
-                        self.log_status("🛑 Continue After Trade is set to No, stopping the bot")
-                        self.stop()
-                    
-                    return True
-                else:
-                    self.log_status("❌ Order submission failed")
-            except Exception as e:
-                self.log_status(f"❌ Error executing trade: {str(e)}")
-                
-                # Check for specific error types
-                error_str = str(e).lower()
-                if "precision" in error_str:
-                    self.log_status("⚠️ Precision error detected. Try adjusting the quantity to match instrument requirements.")
-                elif "insufficient margin" in error_str:
-                    self.log_status("⚠️ Insufficient margin available for this trade.")
-                elif "market halted" in error_str:
-                    self.log_status("⚠️ Market is currently halted or closed.")
-                
+            # Determine trade direction
+            if direction == "LONG":
+                side = 'buy'
+            elif direction == "SHORT":
+                side = 'sell'
+            else:
+                self.log_status(f"❌ AI does not recommend a trade direction: {direction}")
                 return False
             
+            # Calculate position size based on risk percentage if enabled
+            if risk_percent is not None and stop_loss is not None:
+                try:
+                    # Get account balance
+                    cash, _, total_value = self.broker._get_balances_at_broker()
+                    
+                    # Calculate risk amount in account currency
+                    risk_amount = total_value * (risk_percent / 100)
+                    
+                    # Calculate price difference between entry and stop loss
+                    price_diff = abs(entry_price - stop_loss)
+                    
+                    if price_diff > 0:
+                        # Calculate position size based on risk
+                        risk_based_quantity = risk_amount / price_diff
+                        
+                        # Format quantity according to instrument requirements
+                        risk_based_quantity = self.format_quantity(symbol, risk_based_quantity)
+                        
+                        # Log the formatted quantity
+                        self.log_status(f"🔄 Adjusted {symbol} quantity to match instrument requirements: {risk_based_quantity}")
+                        
+                        self.log_status(f"💹 Risk-based position sizing: {risk_percent}% risk = {risk_amount:.2f} currency units")
+                        self.log_status(f"💹 Price difference to stop loss: {price_diff:.2f}, calculated quantity: {risk_based_quantity}")
+                        
+                        # Update quantity with risk-based calculation
+                        quantity = risk_based_quantity
+                        self.log_status(f"💹 Using risk-based position size: {quantity}")
+                        
+                        # Update the order quantity immediately
+                        quantity = quantity
+                    else:
+                        self.log_status("⚠️ Cannot calculate risk-based position size: Entry price and stop loss are too close")
+                except Exception as e:
+                    self.log_status(f"⚠️ Error calculating risk-based position size: {str(e)}")
+                    self.log_status("⚠️ Using default quantity from parameters")
+            
+            # Place the order
+            order = {
+                'symbol': symbol,
+                'side': side,
+                'quantity': quantity,
+                'order_type': 'pending',
+                'price': entry_price,
+                'take_profit': take_profit,
+                'stop_loss': stop_loss
+            }
+            
+            order_result = self.broker.submit_order(order)
+            
+            if order_result:
+                # Store the trade details
+                trade_id = order_result
+                self.active_trades[trade_id] = {
+                    'symbol': symbol,
+                    'side': side,
+                    'quantity': quantity,
+                    'entry_price': entry_price,
+                    'take_profit': take_profit,
+                    'stop_loss': stop_loss,
+                    'entry_time': datetime.now(),
+                    'trade_id': trade_id
+                }
+                
+                # Increment our position counter
+                self.active_position_count += 1
+                self.log_status(f"ℹ️ Position counter updated: {self.active_position_count}/{self.parameters['max_concurrent_trades']} active positions")
+                
+                self.log_status(f"✅ {side} Stop Pending Order placed successfully at {entry_price}")
+                return True
+            else:
+                self.log_status(f"❌ Failed to place order")
+                return False
+                
         except Exception as e:
             self.log_status(f"❌ Error executing trade: {str(e)}")
-            logger.error(f"Error executing trade: {e}", exc_info=True)
+            logger.error(f"Trade execution error: {e}", exc_info=True)
             return False
 
     def check_exit_conditions(self):
-        """Check if we should exit any open trades"""
+        """Check if any active trades should be exited"""
         try:
             # If no active trades, nothing to check
             if not self.active_trades:
                 return False
             
-            # Track trades to exit
+            # Get all broker position IDs
+            broker_positions = self.broker.get_tracked_positions()
+            broker_position_ids = [pos['id'] for pos in broker_positions]
+            
             trades_to_exit = []
+            trades_to_remove = []
             
             # Check each active trade
-            for trade_id, trade in self.active_trades.items():
+            for trade_id, trade in list(self.active_trades.items()):
+                # Check if the position still exists at the broker
+                position_exists = any(trade_id in pos_id for pos_id in broker_position_ids)
+                
+                if not position_exists:
+                    self.log_status(f"ℹ️ Position {trade_id} was closed by the broker")
+                    trades_to_remove.append(trade_id)
+                    continue
+                
+                # Skip checks for pending orders
+                if trade.get('status') == 'pending':
+                    self.log_status(f"ℹ️ Order {trade_id} is still pending, skipping exit check")
+                    continue
+                
+                # Get current price
                 symbol = trade['symbol']
                 current_price = self.broker.get_last_price(symbol)
                 
@@ -744,39 +776,94 @@ class AIStrategy:
                 take_profit = trade.get('take_profit')
                 stop_loss = trade.get('stop_loss')
                 
-                # Check if we should exit based on take profit or stop loss
-                should_exit = False
-                exit_reason = ""
+                # Check if trailing stop loss is enabled
+                if self.parameters.get('trailing_stop_loss', False) and stop_loss is not None:
+                    # Calculate the initial stop loss distance
+                    if side == 'BUY':
+                        initial_stop_distance = entry_price - stop_loss
+                        
+                        # Only update if price has moved up from entry
+                        if current_price > entry_price:
+                            # Calculate new stop loss by maintaining the same distance from current price
+                            potential_new_stop = current_price - initial_stop_distance
+                            potential_new_stop = self.format_price(symbol, potential_new_stop)
+                            
+                            # Only update if the new stop loss is higher than the current one
+                            if potential_new_stop > stop_loss:
+                                old_stop_loss = stop_loss
+                                trade['stop_loss'] = potential_new_stop
+                                stop_loss = potential_new_stop  # Update local variable for exit check
+                                
+                                # Log the update
+                                self.log_status(f"🔄 Trailing Stop Loss updated: {old_stop_loss:.2f} → {potential_new_stop:.2f} (Current price: {current_price:.2f})")
+                                
+                                # Update the stop loss with the broker
+                                try:
+                                    # Use the trading server API to update the stop loss
+                                    update_url = f"{self.broker.api_url}/api/update-stop-loss/{trade_id}"
+                                    response = requests.post(update_url, json={'stop_loss': potential_new_stop})
+                                    
+                                    if response.status_code == 200:
+                                        self.log_status(f"✅ Stop loss updated with broker")
+                                    else:
+                                        self.log_status(f"⚠️ Failed to update stop loss with broker: HTTP {response.status_code}")
+                                except Exception as e:
+                                    self.log_status(f"⚠️ Error updating stop loss with broker: {str(e)}")
+                        
+                    # For short positions, if price moves down, move stop loss down
+                    elif side == 'SELL':
+                        initial_stop_distance = stop_loss - entry_price
+                        
+                        # Only update if price has moved down from entry
+                        if current_price < entry_price:
+                            # Calculate new stop loss by maintaining the same distance from current price
+                            potential_new_stop = current_price + initial_stop_distance
+                            potential_new_stop = self.format_price(symbol, potential_new_stop)
+                            
+                            # Only update if the new stop loss is lower than the current one
+                            if potential_new_stop < stop_loss:
+                                old_stop_loss = stop_loss
+                                trade['stop_loss'] = potential_new_stop
+                                stop_loss = potential_new_stop  # Update local variable for exit check
+                                
+                                # Log the update
+                                self.log_status(f"🔄 Trailing Stop Loss updated: {old_stop_loss:.2f} → {potential_new_stop:.2f} (Current price: {current_price:.2f})")
+                                
+                                # Update the stop loss with the broker
+                                try:
+                                    # Use the trading server API to update the stop loss
+                                    update_url = f"{self.broker.api_url}/api/update-stop-loss/{trade_id}"
+                                    response = requests.post(update_url, json={'stop_loss': potential_new_stop})
+                                    
+                                    if response.status_code == 200:
+                                        self.log_status(f"✅ Stop loss updated with broker")
+                                    else:
+                                        self.log_status(f"⚠️ Failed to update stop loss with broker: HTTP {response.status_code}")
+                                except Exception as e:
+                                    self.log_status(f"⚠️ Error updating stop loss with broker: {str(e)}")
+                    
+                    # We don't need to check for take profit or stop loss hits here
+                    # as the broker will handle those automatically
+                    
+                    # Add any custom exit conditions here if needed
+                    # For example, time-based exits, indicator-based exits, etc.
+                    
+                # Remove trades that were closed by the broker
+                for trade_id in trades_to_remove:
+                    if trade_id in self.active_trades:
+                        # Get the trade details before removing
+                        trade = self.active_trades[trade_id]
+                        
+                        # Remove from our active trades
+                        del self.active_trades[trade_id]
+                        
+                        # Decrement our position counter
+                        self.active_position_count = max(0, self.active_position_count - 1)
+                        self.log_status(f"ℹ️ Position counter updated: {self.active_position_count}/{self.parameters['max_concurrent_trades']} active positions")
                 
-                if side == 'BUY':
-                    # For long positions
-                    if take_profit and current_price >= take_profit:
-                        should_exit = True
-                        exit_reason = f"Take profit reached: {current_price:.2f} >= {take_profit:.2f}"
-                    elif stop_loss and current_price <= stop_loss:
-                        should_exit = True
-                        exit_reason = f"Stop loss triggered: {current_price:.2f} <= {stop_loss:.2f}"
-                else:  # SELL
-                    # For short positions
-                    if take_profit and current_price <= take_profit:
-                        should_exit = True
-                        exit_reason = f"Take profit reached: {current_price:.2f} <= {take_profit:.2f}"
-                    elif stop_loss and current_price >= stop_loss:
-                        should_exit = True
-                        exit_reason = f"Stop loss triggered: {current_price:.2f} >= {stop_loss:.2f}"
+                # Return True if we have trades to exit (for custom exit conditions)
+                return len(trades_to_exit) > 0
                 
-                # If we should exit this trade, add it to the list
-                if should_exit:
-                    trades_to_exit.append((trade_id, exit_reason))
-            
-            # If we have trades to exit, log and return True
-            if trades_to_exit:
-                for trade_id, reason in trades_to_exit:
-                    self.log_status(f"🔄 Exit signal for trade {trade_id}: {reason}")
-                return True
-            
-            return False
-            
         except Exception as e:
             self.log_status(f"❌ Error checking exit conditions: {str(e)}")
             logger.error(f"Error checking exit conditions: {e}", exc_info=True)
@@ -790,91 +877,19 @@ class AIStrategy:
                 self.log_status("ℹ️ No active trades to exit")
                 return False
             
-            exit_results = []
-            
-            # Exit each active trade
+            # Simply update the position counter for each active trade
             for trade_id, trade in list(self.active_trades.items()):
-                symbol = trade['symbol']
-                side = trade['side']
-                quantity = trade['quantity']
-                entry_price = trade['entry_price']
-                entry_time = trade['entry_time']
+                # Log that we're exiting the trade
+                self.log_status(f"ℹ️ Exiting trade {trade_id} for {trade['symbol']}")
                 
-                # Get current price
-                current_price = self.broker.get_last_price(symbol)
-                if not current_price:
-                    self.log_status(f"❌ Could not get current price for {symbol}, cannot exit trade")
-                    continue
+                # Remove the trade from active trades
+                del self.active_trades[trade_id]
                 
-                # Ensure current_price is a float
-                try:
-                    current_price = float(current_price)
-                except (ValueError, TypeError):
-                    self.log_status(f"❌ Invalid current price format: {current_price}")
-                    continue
-                
-                # Calculate profit/loss
-                if side == 'BUY':
-                    profit_loss = (current_price - entry_price) * quantity
-                    profit_pct = (current_price - entry_price) / entry_price * 100
-                else:  # SELL
-                    profit_loss = (entry_price - current_price) * quantity
-                    profit_pct = (entry_price - current_price) / entry_price * 100
-                
-                # Create exit order (opposite of entry)
-                exit_side = 'sell' if side == 'BUY' else 'buy'
-                exit_order = {
-                    'symbol': symbol,
-                    'quantity': quantity,
-                    'side': exit_side,
-                    'order_type': 'market'
-                }
-                
-                # Submit exit order
-                try:
-                    exit_order_id = self.broker.submit_order(exit_order)
-                    
-                    if exit_order_id:
-                        # Record trade result
-                        trade_result = {
-                            'symbol': symbol,
-                            'entry_price': entry_price,
-                            'exit_price': current_price,
-                            'quantity': quantity,
-                            'side': side,
-                            'entry_time': entry_time,
-                            'exit_time': self.broker.get_time(),
-                            'profit_loss': profit_loss,
-                            'profit_pct': profit_pct
-                        }
-                        
-                        # Add to trade history
-                        self.trades_history.append(trade_result)
-                        
-                        # Update performance metrics
-                        self.update_performance(trade_result)
-                        
-                        # Log exit
-                        profit_emoji = "📈" if profit_loss > 0 else "📉"
-                        self.log_status(
-                            f"{profit_emoji} Exited {side} position on {symbol} at {current_price:.2f} "
-                            f"(Entry: {entry_price:.2f}, P/L: {profit_loss:.2f} EUR, {profit_pct:.2f}%)"
-                        )
-                        
-                        # Remove from active trades
-                        del self.active_trades[trade_id]
-                        
-                        exit_results.append(True)
-                    else:
-                        self.log_status(f"❌ Failed to exit trade {trade_id}")
-                        exit_results.append(False)
-                        
-                except Exception as e:
-                    self.log_status(f"❌ Error exiting trade {trade_id}: {str(e)}")
-                    exit_results.append(False)
+                # Decrement our position counter
+                self.active_position_count = max(0, self.active_position_count - 1)
+                self.log_status(f"ℹ️ Position counter updated: {self.active_position_count}/{self.parameters['max_concurrent_trades']} active positions")
             
-            # Return True if all trades were exited successfully
-            return all(exit_results) if exit_results else False
+            return True
             
         except Exception as e:
             self.log_status(f"❌ Error exiting trades: {str(e)}")
@@ -948,15 +963,20 @@ class AIStrategy:
             # Get current positions from the broker
             current_positions = self.broker.get_tracked_positions()
             
-            # Filter positions for the current symbol
+            # Log all positions for debugging
+            # self.log_status(f"🔍 Debug: All tracked positions: {list(current_positions.keys())}")
+            
+            # Filter positions for the current symbol - use improved matching logic
             symbol = self.parameters['symbol']
             symbol_positions = []
             for pos_id, pos in current_positions.items():
-                if pos['symbol'] == symbol:
+                # Check if the position ID contains the symbol or if the symbol field matches
+                if (symbol in pos_id) or (pos.get('symbol') == symbol):
                     symbol_positions.append(pos)
+                    self.log_status(f"🔍 Debug: Found position for {symbol}: {pos_id}")
             
-            # Log the number of active positions
-            self.log_status(f"ℹ️ Current active positions for {symbol}: {len(symbol_positions)}/{self.parameters['max_concurrent_trades']}")
+            # Log the number of active positions using our counter
+            self.log_status(f"ℹ️ Current active positions for {symbol}: {self.active_position_count}/{self.parameters['max_concurrent_trades']}")
             
             # Check if we have any active trades to exit
             if self.active_trades:
@@ -974,13 +994,13 @@ class AIStrategy:
                         return
             
             # Check if we can enter a new trade (if we haven't reached max_concurrent_trades)
-            if len(symbol_positions) < self.parameters['max_concurrent_trades']:
+            if self.active_position_count < self.parameters['max_concurrent_trades']:
                 # Check if we should enter a trade
                 if self.should_enter_trade():
                     self.execute_trade()
                     # The execute_trade method now handles stopping if Continue After Trade is No
             else:
-                self.log_status(f"ℹ️ Maximum concurrent trades reached ({len(symbol_positions)}/{self.parameters['max_concurrent_trades']}), waiting for positions to close")
+                self.log_status(f"ℹ️ Maximum concurrent trades reached ({self.active_position_count}/{self.parameters['max_concurrent_trades']}), waiting for positions to close")
 
         except Exception as e:
             self.log_status(f"❌ Error in trading logic: {str(e)}")
