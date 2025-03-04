@@ -735,28 +735,95 @@ class AIStrategy:
             
             # Get all broker position IDs
             broker_positions = self.broker.get_tracked_positions()
-            broker_position_ids = [pos['id'] for pos in broker_positions]
+            
+            # Debug log all positions
+            self.log_status(f"🔍 DEBUG: All tracked positions: {[pos.get('id', '') for pos in broker_positions]}")
+            
+            # Improve position ID matching - some brokers might store the full ID, others just the number
+            broker_position_ids = []
+            for pos in broker_positions:
+                pos_id = pos.get('id', '')
+                # Add both the full ID and just the numeric part if it exists
+                broker_position_ids.append(pos_id)
+                # If the ID is numeric, also add it as a string
+                if pos_id.isdigit():
+                    broker_position_ids.append(int(pos_id))
+            
+            # Get pending orders from the broker
+            pending_orders = self.broker.get_pending_orders() or []
+            
+            # Debug log all pending orders
+            self.log_status(f"🔍 DEBUG: All pending orders: {pending_orders}")
             
             trades_to_exit = []
             trades_to_remove = []
             
             # Check each active trade
             for trade_id, trade in list(self.active_trades.items()):
-                # Check if the position still exists at the broker
-                position_exists = any(trade_id in pos_id for pos_id in broker_position_ids)
+                symbol = trade['symbol']
                 
-                if not position_exists:
-                    self.log_status(f"ℹ️ Position {trade_id} was closed by the broker")
+                # Check if this is a pending order
+                is_pending = trade_id in pending_orders
+                
+                # More robust position existence check
+                # A position exists if either:
+                # 1. The exact trade_id is in broker_position_ids
+                # 2. The trade_id (as a string) is in any of the broker position IDs
+                # 3. The trade_id (as an integer) is in any of the broker position IDs
+                position_exists = (
+                    trade_id in broker_position_ids or
+                    any(str(trade_id) in str(pos_id) for pos_id in broker_position_ids)
+                )
+                
+                self.log_status(f"🔍 DEBUG: Checking trade {trade_id} - Pending: {is_pending}, Position exists: {position_exists}")
+                
+                # Only mark as closed if it's not pending AND not in active positions
+                if not is_pending and not position_exists and trade_id not in trades_to_remove:
+                    # Try to determine how the position was closed
+                    entry_price = trade.get('entry_price', 0)
+                    take_profit = trade.get('take_profit')
+                    stop_loss = trade.get('stop_loss')
+                    
+                    # Get the last known price for this symbol
+                    last_price = self.broker.get_last_price(symbol)
+                    
+                    if last_price:
+                        # Convert to float for comparison
+                        try:
+                            last_price = float(last_price)
+                            
+                            # For long positions
+                            if trade.get('side') == 'BUY':
+                                if take_profit and abs(last_price - float(take_profit)) / float(take_profit) < 0.001:
+                                    self.log_status(f"✅ Position {trade_id} closed: Take profit hit at {last_price}")
+                                elif stop_loss and abs(last_price - float(stop_loss)) / float(stop_loss) < 0.001:
+                                    self.log_status(f"⚠️ Position {trade_id} closed: Stop loss hit at {last_price}")
+                                else:
+                                    self.log_status(f"ℹ️ Position {trade_id} closed at {last_price}")
+                            
+                            # For short positions
+                            elif trade.get('side') == 'SELL':
+                                if take_profit and abs(last_price - float(take_profit)) / float(take_profit) < 0.001:
+                                    self.log_status(f"✅ Position {trade_id} closed: Take profit hit at {last_price}")
+                                elif stop_loss and abs(last_price - float(stop_loss)) / float(stop_loss) < 0.001:
+                                    self.log_status(f"⚠️ Position {trade_id} closed: Stop loss hit at {last_price}")
+                                else:
+                                    self.log_status(f"ℹ️ Position {trade_id} closed at {last_price}")
+                            
+                        except (ValueError, TypeError):
+                            self.log_status(f"ℹ️ Position {trade_id} closed (price: {last_price})")
+                    else:
+                        self.log_status(f"ℹ️ Position {trade_id} closed")
+                    
                     trades_to_remove.append(trade_id)
                     continue
                 
-                # Skip checks for pending orders
-                if trade.get('status') == 'pending':
-                    self.log_status(f"ℹ️ Order {trade_id} is still pending, skipping exit check")
+                # Skip further checks for pending orders
+                if is_pending:
+                    self.log_status(f"ℹ️ Trade {trade_id} is still a pending order, skipping exit check")
                     continue
                 
                 # Get current price
-                symbol = trade['symbol']
                 current_price = self.broker.get_last_price(symbol)
                 
                 if not current_price:
@@ -848,22 +915,22 @@ class AIStrategy:
                     # Add any custom exit conditions here if needed
                     # For example, time-based exits, indicator-based exits, etc.
                     
-                # Remove trades that were closed by the broker
-                for trade_id in trades_to_remove:
-                    if trade_id in self.active_trades:
-                        # Get the trade details before removing
-                        trade = self.active_trades[trade_id]
-                        
-                        # Remove from our active trades
-                        del self.active_trades[trade_id]
-                        
-                        # Decrement our position counter
-                        self.active_position_count = max(0, self.active_position_count - 1)
-                        self.log_status(f"ℹ️ Position counter updated: {self.active_position_count}/{self.parameters['max_concurrent_trades']} active positions")
-                
-                # Return True if we have trades to exit (for custom exit conditions)
-                return len(trades_to_exit) > 0
-                
+            # Remove trades that were closed by the broker
+            for trade_id in trades_to_remove:
+                if trade_id in self.active_trades:
+                    # Get the trade details before removing
+                    trade = self.active_trades[trade_id]
+                    
+                    # Remove from our active trades
+                    del self.active_trades[trade_id]
+                    
+                    # Decrement our position counter
+                    self.active_position_count = max(0, self.active_position_count - 1)
+                    self.log_status(f"ℹ️ Position counter updated: {self.active_position_count}/{self.parameters['max_concurrent_trades']} active positions")
+            
+            # Return True if we have trades to exit (for custom exit conditions)
+            return len(trades_to_exit) > 0
+            
         except Exception as e:
             self.log_status(f"❌ Error checking exit conditions: {str(e)}")
             logger.error(f"Error checking exit conditions: {e}", exc_info=True)
@@ -939,32 +1006,37 @@ class AIStrategy:
                 if new_performance:
                     self.performance = new_performance
             
-            # Check if we need to get a new AI analysis
-            current_time = datetime.now()
-            analysis_age_hours = 0
-            
-            if self.last_analysis_time:
-                analysis_age = current_time - self.last_analysis_time
-                analysis_age_hours = analysis_age.total_seconds() / 3600
-            
-            # Get new analysis if we don't have one or if it's older than 4 hours
-            if not self.ai_analysis or analysis_age_hours > 4:
-                # Get the asset name for display - this is now correctly using the current symbol
-                asset_name = self.symbol_to_asset_map.get(self.parameters['symbol'], 'Gold')
-                trading_term = self.parameters['trading_term']
-                risk_level = self.parameters['risk_level']
+            # Skip requesting new AI analysis if max_concurrent_trades is 1 and we already have an active trade
+            if self.parameters['max_concurrent_trades'] == 1 and self.active_position_count >= 1:
+                self.log_status(f"ℹ️ Max concurrent trades is 1 and we already have {self.active_position_count} active position(s), skipping AI analysis request")
+            else:
+                # Check if we need to get a new AI analysis
+                current_time = datetime.now()
+                analysis_age_hours = 0
                 
-                # Request new AI analysis with the correct asset name
-                self.ai_analysis = await self.get_ai_analysis()
-                if not self.ai_analysis:
-                    self.log_status("❌ Failed to get AI analysis, skipping trading cycle")
-                    return
+                if self.last_analysis_time:
+                    analysis_age = current_time - self.last_analysis_time
+                    analysis_age_hours = analysis_age.total_seconds() / 3600
+                
+                # Get new analysis if we don't have one or if it's older than 4 hours
+                if not self.ai_analysis or analysis_age_hours > 4:
+                    # Get the asset name for display - this is now correctly using the current symbol
+                    asset_name = self.symbol_to_asset_map.get(self.parameters['symbol'], 'Gold')
+                    trading_term = self.parameters['trading_term']
+                    risk_level = self.parameters['risk_level']
+                    
+                    # Request new AI analysis with the correct asset name
+                    self.log_status(f"🔄 Requesting new AI analysis for {asset_name} ({trading_term}, {risk_level})")
+                    self.ai_analysis = await self.get_ai_analysis()
+                    if not self.ai_analysis:
+                        self.log_status("❌ Failed to get AI analysis, skipping trading cycle")
+                        return
+                    
+                    self.last_analysis_time = current_time
+                    self.log_status(f"✅ New AI analysis received")
             
             # Get current positions from the broker
             current_positions = self.broker.get_tracked_positions()
-            
-            # Log all positions for debugging
-            # self.log_status(f"🔍 Debug: All tracked positions: {list(current_positions.keys())}")
             
             # Filter positions for the current symbol - use improved matching logic
             symbol = self.parameters['symbol']
@@ -1103,6 +1175,8 @@ class AIStrategy:
                     'stop_loss': trade['stop_loss']
                 })
         
+        # Comment out performance metrics
+        """
         # Calculate win rate
         win_rate = 0.0
         if self.performance['total_trades'] > 0:
@@ -1113,12 +1187,14 @@ class AIStrategy:
             **self.performance,
             'win_rate': win_rate
         }
+        """
         
         return {
             'name': f"AI {asset_name} Strategy",
             'running': self._continue,
             'parameters': self.parameters,
-            'performance': performance_data,
+            # Comment out performance data
+            # 'performance': performance_data,
             'recent_updates': self.status_updates,
             'available_instruments': self.available_instruments,
             'active_trades': current_positions,
@@ -1237,10 +1313,18 @@ class AIStrategy:
         return True 
 
     def clear_logs(self):
-        """Manually clear all status updates/logs"""
-        self.status_updates = []
-        self.log_status("🧹 Logs have been manually cleared")
-        return True 
+        """Clear status updates"""
+        # Keep only the most recent status update
+        if self.status_updates:
+            last_update = self.status_updates[-1]
+            self.status_updates = [last_update]
+        else:
+            self.status_updates = []
+        
+        # Also clear any debug logs that might be confusing
+        self.status_updates = [log for log in self.status_updates if "DEBUG:" not in log and "Position was closed by the broker" not in log]
+        
+        return {"status": "success", "message": "Logs cleared"}
 
     def get_instrument_precision(self, symbol):
         """Get the required precision for a given instrument"""
