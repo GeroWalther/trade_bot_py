@@ -10,7 +10,8 @@ load_dotenv()
 OANDA_CREDS = {
     'ACCESS_TOKEN': os.getenv('OANDA_ACCESS_TOKEN'),
     'ACCOUNT_ID': os.getenv('OANDA_ACCOUNT_ID'),
-    'ENVIRONMENT': 'practice'  # or 'live' for real trading
+    'ENVIRONMENT': 'practice',  # or 'live' for real trading
+    'API_URL': os.getenv('TRADING_SERVER_URL', 'http://localhost:5000')  # Default to localhost if not specified
 }
 
 # Validate configuration

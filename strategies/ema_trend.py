@@ -26,7 +26,10 @@ class EMATrendStrategy:
             'ema_period': 50,
             'check_interval': 240,
             'continue_after_trade': True,
-            'max_concurrent_trades': 1
+            'max_concurrent_trades': 1,
+            'trailing_stop_loss': False,  # Whether to use trailing stop loss
+            'risk_level': 0.02,  # Default risk level (2%)
+            'take_profit_level': 0.04  # Default take profit level (4%)
         }
         
         # Update with provided parameters if any
@@ -127,6 +130,38 @@ class EMATrendStrategy:
             logger.error(f"Error in should_enter_trade: {e}")
             return False
 
+    def get_price_precision(self, symbol):
+        """Get the required price precision for a given instrument"""
+        # Check for forex pairs first (they contain an underscore and currency codes)
+        if '_' in symbol and any(curr in symbol for curr in ['EUR', 'GBP', 'USD', 'JPY', 'AUD', 'CAD', 'CHF', 'NZD']):
+            # Make sure it's not a crypto or index that happens to have USD in the name
+            if not any(asset in symbol for asset in ['BTC', 'SPX', 'NAS', 'XAU']):
+                return 5  # 5 decimal places for forex pairs
+        
+        # Then check for specific instruments
+        if 'XAU' in symbol:
+            return 2  # 2 decimal places for Gold
+        elif 'BTC' in symbol:
+            return 2  # 2 decimal places for Bitcoin
+        elif 'SPX' in symbol or 'NAS' in symbol:
+            return 2  # 2 decimal places for indices
+        else:
+            return 2  # Default to 2 decimal places for safety
+
+    def format_price(self, symbol, price):
+        """Format price according to instrument precision requirements"""
+        try:
+            precision = self.get_price_precision(symbol)
+            
+            # For decimal precision instruments
+            formatted_price = round(float(price), precision)
+            
+            return formatted_price
+        except Exception as e:
+            self.log_status(f"⚠️ Error formatting price: {str(e)}")
+            # Return original price as fallback
+            return price
+
     def execute_trade(self):
         """Execute trade based on EMA strategy"""
         try:
@@ -150,18 +185,35 @@ class EMATrendStrategy:
             if current_price > ema_value:
                 side = 'buy'
                 self.log_status(f"🚀 Price ({current_price:.5f}) above EMA ({ema_value:.5f}) - Going LONG")
+                # Calculate stop loss and take profit for BUY
+                raw_stop_loss = current_price * (1 - self.parameters['risk_level'])
+                raw_take_profit = current_price * (1 + self.parameters['take_profit_level'])
+                # Format prices according to instrument precision
+                stop_loss = self.format_price(symbol, raw_stop_loss)
+                take_profit = self.format_price(symbol, raw_take_profit)
             else:
                 side = 'sell'
                 self.log_status(f"🔻 Price ({current_price:.5f}) below EMA ({ema_value:.5f}) - Going SHORT")
+                # Calculate stop loss and take profit for SELL
+                raw_stop_loss = current_price * (1 + self.parameters['risk_level'])
+                raw_take_profit = current_price * (1 - self.parameters['take_profit_level'])
+                # Format prices according to instrument precision
+                stop_loss = self.format_price(symbol, raw_stop_loss)
+                take_profit = self.format_price(symbol, raw_take_profit)
             
             logger.info(f"Submitting order: {symbol} {side} {quantity} @ {current_price}")
+            logger.info(f"Stop Loss: {stop_loss}, Take Profit: {take_profit}")
+            
             order = {
                 'symbol': symbol,
                 'quantity': quantity,
-                'side': side
+                'side': side,
+                'stop_loss': stop_loss,
+                'take_profit': take_profit
             }
             
             self.log_status(f"🔄 Initiating {side.upper()} order: {quantity} {symbol} @ {current_price:.5f}")
+            self.log_status(f"📊 Risk Management: Stop Loss @ {stop_loss:.5f}, Take Profit @ {take_profit:.5f}")
             order_id = self.broker.submit_order(order)
             logger.info(f"Order result: {order_id}")
             
@@ -170,27 +222,23 @@ class EMATrendStrategy:
                     'order_id': order_id,
                     'symbol': symbol,
                     'quantity': quantity,
+                    'side': side,
                     'entry_price': current_price,
                     'entry_time': self.broker.get_time(),
-                    'side': side.upper()
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'initial_stop_loss': stop_loss  # Store initial stop loss for trailing calculation
                 }
-                self.log_status(
-                    f"✅ Position opened successfully:\n"
-                    f"   Symbol: {symbol}\n"
-                    f"   Side: {side.upper()}\n"
-                    f"   Quantity: {quantity}\n"
-                    f"   Entry Price: {current_price:.5f}\n"
-                    f"   EMA: {ema_value:.5f}\n"
-                    f"   Time: {self.broker.get_time().strftime('%H:%M:%S')}"
-                )
+                
+                self.log_status(f"✅ Order placed successfully: ID {order_id}")
                 return True
-            else:
-                self.log_status("❌ Order submission failed")
             
+            self.log_status("❌ Failed to place order")
             return False
             
         except Exception as e:
             self.log_status(f"❌ Error executing trade: {e}")
+            logger.error(f"Error in execute_trade: {e}", exc_info=True)
             return False
 
     def exit_trade(self):
@@ -261,7 +309,10 @@ class EMATrendStrategy:
             f"   Quantity: {self.parameters['quantity']}\n"
             f"   Check Interval: {self.parameters['check_interval']}s\n"
             f"   Continue After Trade: {'Yes' if self.parameters['continue_after_trade'] else 'No'}\n"
-            f"   Max Concurrent Trades: {self.parameters['max_concurrent_trades']}"
+            f"   Max Concurrent Trades: {self.parameters['max_concurrent_trades']}\n"
+            f"   Trailing Stop Loss: {'Enabled' if self.parameters['trailing_stop_loss'] else 'Disabled'}\n"
+            f"   Risk Level: {self.parameters['risk_level'] * 100}%\n"
+            f"   Take Profit Level: {self.parameters['take_profit_level'] * 100}%"
         )
         
         while self._continue:
@@ -427,11 +478,115 @@ class EMATrendStrategy:
             logger.error(f"Trade result: {trade_result}")
             logger.error(f"Current performance: {self.performance}")
 
+    def check_exit_conditions(self):
+        """Check if current trade should be exited based on take profit or stop loss"""
+        try:
+            if not self.current_trade:
+                return False
+            
+            symbol = self.current_trade['symbol']
+            current_price = self.broker.get_last_price(symbol)
+            
+            if not current_price:
+                logger.error(f"Could not get current price for {symbol}")
+                return False
+            
+            entry_price = self.current_trade['entry_price']
+            stop_loss = self.current_trade['stop_loss']
+            take_profit = self.current_trade['take_profit']
+            side = self.current_trade['side']
+            
+            # Log current position status
+            profit_loss = (current_price - entry_price) if side == 'buy' else (entry_price - current_price)
+            profit_pct = (profit_loss / entry_price) * 100
+            
+            self.log_status(
+                f"📈 Position Update:\n"
+                f"   Entry: {entry_price:.5f}\n"
+                f"   Current: {current_price:.5f}\n"
+                f"   P/L: {profit_loss:.5f} ({profit_pct:.2f}%)\n"
+                f"   Stop Loss: {stop_loss:.5f}\n"
+                f"   Take Profit: {take_profit:.5f}"
+            )
+            
+            # Check if trailing stop loss is enabled
+            if self.parameters['trailing_stop_loss']:
+                # Calculate initial stop loss distance
+                if side == 'buy':
+                    initial_stop_distance = entry_price - self.current_trade['initial_stop_loss']
+                    # For BUY trades, if price moves up, move stop loss up
+                    raw_new_stop = current_price - initial_stop_distance
+                    potential_new_stop = self.format_price(symbol, raw_new_stop)
+                    if potential_new_stop > stop_loss:
+                        # Update stop loss to new level
+                        self.current_trade['stop_loss'] = potential_new_stop
+                        logger.info(f"Updated trailing stop loss to {potential_new_stop:.5f}")
+                        self.log_status(f"🔄 Trailing Stop Loss updated: {potential_new_stop:.5f}")
+                        
+                        # If trade has an order ID, update the stop loss with the broker
+                        if 'order_id' in self.current_trade:
+                            try:
+                                self.broker.modify_order(
+                                    self.current_trade['order_id'],
+                                    {'stop_loss': potential_new_stop}
+                                )
+                            except Exception as e:
+                                logger.error(f"Error updating stop loss with broker: {e}")
+                else:  # side == 'sell'
+                    initial_stop_distance = self.current_trade['initial_stop_loss'] - entry_price
+                    # For SELL trades, if price moves down, move stop loss down
+                    raw_new_stop = current_price + initial_stop_distance
+                    potential_new_stop = self.format_price(symbol, raw_new_stop)
+                    if potential_new_stop < stop_loss:
+                        # Update stop loss to new level
+                        self.current_trade['stop_loss'] = potential_new_stop
+                        logger.info(f"Updated trailing stop loss to {potential_new_stop:.5f}")
+                        self.log_status(f"🔄 Trailing Stop Loss updated: {potential_new_stop:.5f}")
+                        
+                        # If trade has an order ID, update the stop loss with the broker
+                        if 'order_id' in self.current_trade:
+                            try:
+                                self.broker.modify_order(
+                                    self.current_trade['order_id'],
+                                    {'stop_loss': potential_new_stop}
+                                )
+                            except Exception as e:
+                                logger.error(f"Error updating stop loss with broker: {e}")
+            
+            # Check if price hit stop loss or take profit
+            if side == 'buy':
+                if current_price <= stop_loss:
+                    self.log_status(f"🛑 Stop Loss triggered at {current_price:.5f}")
+                    return self.exit_trade()
+                elif current_price >= take_profit:
+                    self.log_status(f"💰 Take Profit triggered at {current_price:.5f}")
+                    return self.exit_trade()
+            else:  # side == 'sell'
+                if current_price >= stop_loss:
+                    self.log_status(f"🛑 Stop Loss triggered at {current_price:.5f}")
+                    return self.exit_trade()
+                elif current_price <= take_profit:
+                    self.log_status(f"💰 Take Profit triggered at {current_price:.5f}")
+                    return self.exit_trade()
+            
+            return False
+            
+        except Exception as e:
+            self.log_status(f"❌ Error checking exit conditions: {e}")
+            logger.error(f"Error in check_exit_conditions: {e}", exc_info=True)
+            return False
+
     def check_and_trade(self):
         """Main trading logic"""
         try:
             logger.info("Starting check_and_trade cycle")
             logger.info(f"Current parameters: {self.parameters}")
+            
+            # Check if we need to exit current trade
+            if self.current_trade:
+                if self.check_exit_conditions():
+                    logger.info("Exited trade based on exit conditions")
+                    return
             
             # Get current positions for this strategy
             current_positions = self.broker.get_tracked_positions()
@@ -482,4 +637,11 @@ class EMATrendStrategy:
             logger.error(f"Detailed error in check_and_trade: {str(e)}")
             logger.error(f"Current parameters state: {self.parameters}")
             self.log_status(f"❌ Error in trading logic: {str(e)}")
-            logger.error(f"Trading error: {e}", exc_info=True) 
+            logger.error(f"Trading error: {e}", exc_info=True)
+
+    # Add clear_logs method
+    def clear_logs(self):
+        """Manually clear all status updates/logs"""
+        self.status_updates = []
+        self.log_status("🧹 Logs have been manually cleared")
+        return True 

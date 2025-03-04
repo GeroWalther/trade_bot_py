@@ -85,6 +85,11 @@ class OandaTrader:
         self._orders_queue = Queue()  # Add this line
         self._orders = {}  # Add this line for tracking orders
         self._held_trades = {}  # Add this line
+        # Add API URL for the trading server
+        self.api_url = "http://localhost:5000"  # Default to localhost
+        # If API_URL is provided in credentials, use that instead
+        if "API_URL" in credentials:
+            self.api_url = credentials["API_URL"]
         self._price_history = {
             'EUR_USD': deque(maxlen=100),
             'GBP_USD': deque(maxlen=100),

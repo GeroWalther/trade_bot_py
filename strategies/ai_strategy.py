@@ -7,6 +7,7 @@ import aiohttp
 import asyncio
 import os
 import pickle
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -713,6 +714,45 @@ class AIStrategy:
             # Calculate profit/loss
             if side == 'BUY':
                 profit_pct = (current_price - entry_price) / entry_price * 100
+                
+                # Check if trailing stop loss is enabled
+                if self.parameters.get('trailing_stop_loss', False) and stop_loss is not None:
+                    # Calculate the initial stop loss distance
+                    initial_stop_distance = entry_price - stop_loss
+                    
+                    # Calculate the new potential stop loss based on current price
+                    new_stop_loss = current_price - initial_stop_distance
+                    
+                    # Only update stop loss if the new one is higher (better) than the current one
+                    if new_stop_loss > stop_loss:
+                        # Format the new stop loss with proper precision
+                        new_stop_loss = self.format_price(symbol, new_stop_loss)
+                        
+                        # Log the stop loss update
+                        self.log_status(f"🔄 Trailing stop loss updated: {stop_loss:.2f} → {new_stop_loss:.2f}")
+                        
+                        # Update the stop loss in the current trade
+                        self.current_trade['stop_loss'] = new_stop_loss
+                        stop_loss = new_stop_loss
+                        
+                        # Update the stop loss in the broker if possible
+                        try:
+                            if 'order_id' in self.current_trade:
+                                # Use the modify_position endpoint to update the stop loss
+                                response = requests.post(
+                                    f"{self.broker.api_url}/modify-position",
+                                    json={
+                                        'trade_id': self.current_trade['order_id'],
+                                        'stop_loss': stop_loss
+                                    }
+                                )
+                                if response.status_code == 200:
+                                    self.log_status(f"✅ Stop loss successfully updated at broker")
+                                else:
+                                    self.log_status(f"⚠️ Failed to update stop loss at broker: {response.text}")
+                        except Exception as e:
+                            self.log_status(f"⚠️ Error updating stop loss at broker: {str(e)}")
+                
                 # Exit if price reaches take profit or falls below stop loss
                 if take_profit is not None and current_price >= take_profit:
                     self.log_status(f"🎯 Take profit reached: {current_price:.2f} >= {take_profit:.2f}")
@@ -722,6 +762,45 @@ class AIStrategy:
                     return True
             else:  # SELL
                 profit_pct = (entry_price - current_price) / entry_price * 100
+                
+                # Check if trailing stop loss is enabled
+                if self.parameters.get('trailing_stop_loss', False) and stop_loss is not None:
+                    # Calculate the initial stop loss distance
+                    initial_stop_distance = stop_loss - entry_price
+                    
+                    # Calculate the new potential stop loss based on current price
+                    new_stop_loss = current_price + initial_stop_distance
+                    
+                    # Only update stop loss if the new one is lower (better) than the current one
+                    if new_stop_loss < stop_loss:
+                        # Format the new stop loss with proper precision
+                        new_stop_loss = self.format_price(symbol, new_stop_loss)
+                        
+                        # Log the stop loss update
+                        self.log_status(f"🔄 Trailing stop loss updated: {stop_loss:.2f} → {new_stop_loss:.2f}")
+                        
+                        # Update the stop loss in the current trade
+                        self.current_trade['stop_loss'] = new_stop_loss
+                        stop_loss = new_stop_loss
+                        
+                        # Update the stop loss in the broker if possible
+                        try:
+                            if 'order_id' in self.current_trade:
+                                # Use the modify_position endpoint to update the stop loss
+                                response = requests.post(
+                                    f"{self.broker.api_url}/modify-position",
+                                    json={
+                                        'trade_id': self.current_trade['order_id'],
+                                        'stop_loss': stop_loss
+                                    }
+                                )
+                                if response.status_code == 200:
+                                    self.log_status(f"✅ Stop loss successfully updated at broker")
+                                else:
+                                    self.log_status(f"⚠️ Failed to update stop loss at broker: {response.text}")
+                        except Exception as e:
+                            self.log_status(f"⚠️ Error updating stop loss at broker: {str(e)}")
+                
                 # Exit if price falls below take profit or rises above stop loss
                 if take_profit is not None and current_price <= take_profit:
                     self.log_status(f"🎯 Take profit reached: {current_price:.2f} <= {take_profit:.2f}")
@@ -839,7 +918,8 @@ class AIStrategy:
             f"   Term: {self.parameters['trading_term']}\n"
             f"   Risk Level: {self.parameters['risk_level']}\n"
             f"   Check Interval: {self.parameters['check_interval']}s\n"
-            f"   Continue After Trade: {'Yes' if self.parameters['continue_after_trade'] else 'No'}"
+            f"   Continue After Trade: {'Yes' if self.parameters['continue_after_trade'] else 'No'}\n"
+            f"   Trailing Stop Loss: {'Enabled' if self.parameters.get('trailing_stop_loss', False) else 'Disabled'}"
         )
         
         while self._continue:
@@ -951,9 +1031,9 @@ class AIStrategy:
         self.ai_analysis = None
         self.last_analysis_time = None
         self.current_trade = None
-        # Keep status updates when the bot is running
-        if not self._continue:
-            self.status_updates = []
+        # Never clear status updates
+        # if not self._continue:
+        #     self.status_updates = []
         # Keep performance data but reset current trade data
         if hasattr(self, 'performance'):
             self.performance['current_trade'] = None

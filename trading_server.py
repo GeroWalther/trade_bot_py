@@ -884,45 +884,38 @@ def set_manual_analysis():
 
 @app.route('/api/bots/<bot_id>/clear-logs', methods=['POST'])
 def clear_bot_logs(bot_id):
-    try:
-        if bot_id == 'bb_strategy':
-            if not bb_strategy:
-                return jsonify({
-                    'status': 'error',
-                    'message': 'Strategy not initialized'
-                }), 400
-                
-            bb_strategy.clear_logs()
+    """Clear logs for a specific bot - only when explicitly requested"""
+    if bot_id == 'bollinger_bands':
+        if not bb_strategy:
+            return jsonify({
+                'status': 'error',
+                'message': 'Strategy not initialized'
+            }), 400
             
-        elif bot_id == 'ema_strategy':
-            if not ema_strategy:
-                return jsonify({
-                    'status': 'error',
-                    'message': 'Strategy not initialized'
-                }), 400
-                
-            ema_strategy.clear_logs()
-                
-        elif bot_id == 'ai_gold_strategy':
-            if not ai_gold_strategy:
-                return jsonify({
-                    'status': 'error',
-                    'message': 'Strategy not initialized'
-                }), 400
-                
-            ai_gold_strategy.clear_logs()
-            
-        return jsonify({
-            'status': 'success',
-            'message': 'Logs cleared successfully'
-        })
+        bb_strategy.clear_logs()
         
-    except Exception as e:
-        logger.error(f"Error clearing logs for bot {bot_id}: {str(e)}", exc_info=True)
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 500
+    elif bot_id == 'ema_strategy':
+        if not ema_strategy:
+            return jsonify({
+                'status': 'error',
+                'message': 'Strategy not initialized'
+            }), 400
+            
+        ema_strategy.clear_logs()
+            
+    elif bot_id == 'ai_gold_strategy':
+        if not ai_gold_strategy:
+            return jsonify({
+                'status': 'error',
+                'message': 'Strategy not initialized'
+            }), 400
+            
+        ai_gold_strategy.clear_logs()
+        
+    return jsonify({
+        'status': 'success',
+        'message': f'Logs cleared for {bot_id}'
+    })
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5002, debug=True) 
