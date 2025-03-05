@@ -150,24 +150,50 @@ class EMATrendStrategy:
             return 2  # Default to 2 decimal places for safety
 
     def format_price(self, symbol, price):
-        """Format price according to instrument precision requirements"""
+        """Format price according to instrument precision"""
         try:
-            precision = self.get_price_precision(symbol)
+            # Specific handling for JPY pairs
+            if symbol == 'USD_JPY' or symbol == 'EUR_JPY' or 'JPY' in symbol:
+                return round(price, 3)  # JPY pairs typically use 3 decimal places
             
-            # For decimal precision instruments
-            formatted_price = round(float(price), precision)
+            # Handle other forex pairs
+            elif '_' in symbol and any(curr in symbol for curr in ['EUR', 'GBP', 'USD', 'AUD', 'CAD', 'CHF', 'NZD']):
+                # Make sure it's not a crypto or index that happens to have USD in the name
+                if not any(asset in symbol for asset in ['BTC', 'SPX', 'NAS', 'XAU']):
+                    return round(price, 5)  # 5 decimal places for forex pairs
             
-            return formatted_price
+            # Handle specific instruments
+            elif 'XAU' in symbol:
+                return round(price, 2)  # 2 decimal places for Gold
+            elif 'BTC' in symbol:
+                return round(price, 1)  # 1 decimal place for Bitcoin
+            elif 'SPX' in symbol or 'NAS' in symbol:
+                return round(price, 1)  # 1 decimal place for indices
+            else:
+                return round(price, 2)  # Default to 2 decimal places for safety
+                
         except Exception as e:
-            self.log_status(f"⚠️ Error formatting price: {str(e)}")
-            # Return original price as fallback
-            return price
+            self.log_status(f"Error formatting price: {e}")
+            return round(price, 2)  # Return rounded price if formatting fails
 
     def execute_trade(self):
         """Execute trade based on EMA strategy"""
         try:
             logger.info("Starting execute_trade...")
             symbol = self.parameters['symbol']
+            
+            # Check for existing positions first
+            current_positions = self.broker.get_tracked_positions()
+            symbol_positions = []
+            for pos in current_positions.values():
+                if isinstance(pos, dict) and 'instrument' in pos:
+                    if pos['instrument'] == symbol:
+                        symbol_positions.append(pos)
+            
+            # Enforce max concurrent trades = 1
+            if len(symbol_positions) >= 1:
+                self.log_status(f"⚠️ Maximum trades reached ({len(symbol_positions)}). Cannot open new position.")
+                return False
             
             # Calculate position size based on risk percent
             risk_percent = self.parameters.get('risk_percent', 0.5)  # Default to 0.5% if not specified
@@ -207,7 +233,7 @@ class EMATrendStrategy:
                 stop_loss = self.format_price(symbol, raw_stop_loss)
                 take_profit = self.format_price(symbol, raw_take_profit)
                 
-                self.log_status(f"🛡️ Stop Loss set at 50 EMA: {stop_loss:.5f} (Distance: {stop_loss_distance:.5f})")
+                self.log_status(f"🛡️ Stop Loss set at 50 EMA: {stop_loss} (Distance: {stop_loss_distance:.5f})")
             else:
                 side = 'sell'
                 self.log_status(f"🔻 Price ({current_price:.5f}) below EMA ({ema_value:.5f}) - Going SHORT")
@@ -229,27 +255,36 @@ class EMATrendStrategy:
                 stop_loss = self.format_price(symbol, raw_stop_loss)
                 take_profit = self.format_price(symbol, raw_take_profit)
                 
-                self.log_status(f"🛡️ Stop Loss set at 50 EMA: {stop_loss:.5f} (Distance: {stop_loss_distance:.5f})")
+                self.log_status(f"🛡️ Stop Loss set at 50 EMA: {stop_loss} (Distance: {stop_loss_distance:.5f})")
             
-            # Format quantity - don't limit by the quantity parameter
-            quantity = max(quantity, 0.01)  # Ensure minimum quantity
-            quantity = round(quantity, 2)  # Round to 2 decimal places
+            # Format quantity based on instrument
+            if 'JPY' in symbol:
+                quantity = round(quantity, 0)  # Whole units for JPY pairs
+                quantity = max(quantity, 1)  # Minimum 1 unit
+            else:
+                quantity = max(quantity, 0.01)  # Ensure minimum quantity
+                quantity = round(quantity, 2)  # Round to 2 decimal places
             
             self.log_status(f"💰 Risk-based position size: {quantity} (Risk: {risk_percent}%, Account: {account_balance:.2f})")
             
-            logger.info(f"Submitting order: {symbol} {side} {quantity} @ {current_price}")
+            # Format current price
+            formatted_current_price = self.format_price(symbol, current_price)
+            
+            logger.info(f"Submitting order: {symbol} {side} {quantity} @ {formatted_current_price}")
             logger.info(f"Stop Loss: {stop_loss}, Take Profit: {take_profit}")
             
             order = {
                 'symbol': symbol,
                 'quantity': quantity,
                 'side': side,
+                'price': formatted_current_price,
                 'stop_loss': stop_loss,
                 'take_profit': take_profit
             }
             
-            self.log_status(f"🔄 Initiating {side.upper()} order: {quantity} {symbol} @ {current_price:.5f}")
-            self.log_status(f"📊 Risk Management: Stop Loss @ {stop_loss:.5f}, Take Profit @ {take_profit:.5f}")
+            self.log_status(f"🔄 Initiating {side.upper()} order: {quantity} {symbol} @ {formatted_current_price}")
+            self.log_status(f"📊 Risk Management: Stop Loss @ {stop_loss}, Take Profit @ {take_profit}")
+            
             order_id = self.broker.submit_order(order)
             logger.info(f"Order result: {order_id}")
             
@@ -259,7 +294,7 @@ class EMATrendStrategy:
                     'symbol': symbol,
                     'quantity': quantity,
                     'side': side,
-                    'entry_price': current_price,
+                    'entry_price': formatted_current_price,
                     'entry_time': self.broker.get_time(),
                     'stop_loss': stop_loss,
                     'take_profit': take_profit,
@@ -267,7 +302,7 @@ class EMATrendStrategy:
                 }
                 
                 self.log_status(f"✅ Order placed successfully: ID {order_id}")
-                self.log_status(f"🔔 Position OPENED: {quantity} {symbol} @ {current_price:.5f} ({side.upper()})")
+                self.log_status(f"🔔 Position OPENED: {quantity} {symbol} @ {formatted_current_price} ({side.upper()})")
                 return True
             
             self.log_status("❌ Failed to place order")
@@ -345,7 +380,6 @@ class EMATrendStrategy:
             f"   Symbol: {self.parameters['symbol']}\n"
             f"   Check Interval: {self.parameters['check_interval']}s\n"
             f"   Continue After Trade: {'Yes' if self.parameters['continue_after_trade'] else 'No'}\n"
-            f"   Max Concurrent Trades: {self.parameters['max_concurrent_trades']}\n"
             f"   Trailing Stop Loss: {'Enabled' if self.parameters['trailing_stop_loss'] else 'Disabled'}\n"
             f"   Take Profit Level: {self.parameters['take_profit_level'] * 100}%\n"
             f"   Risk Per Trade: {self.parameters['risk_percent']}%\n"
@@ -535,24 +569,35 @@ class EMATrendStrategy:
             current_price = price_action['current_price']
             ema_value = price_action['ema']
             
-            entry_price = self.current_trade['entry_price']
-            stop_loss = self.current_trade['stop_loss']
-            take_profit = self.current_trade['take_profit']
-            side = self.current_trade['side']
+            entry_price = self.current_trade.get('entry_price')
+            stop_loss = self.current_trade.get('stop_loss')
+            take_profit = self.current_trade.get('take_profit')
+            side = self.current_trade.get('side')
+            
+            # Check for None values and handle them
+            if entry_price is None or current_price is None:
+                self.log_status("⚠️ Missing price data for exit calculation")
+                return False
             
             # Log current position status
-            profit_loss = (current_price - entry_price) if side == 'buy' else (entry_price - current_price)
-            profit_pct = (profit_loss / entry_price) * 100
-            
-            self.log_status(
-                f"📈 Position Update:\n"
-                f"   Entry: {entry_price:.5f}\n"
-                f"   Current: {current_price:.5f}\n"
-                f"   EMA: {ema_value:.5f}\n"
-                f"   P/L: {profit_loss:.5f} ({profit_pct:.2f}%)\n"
-                f"   Stop Loss: {stop_loss:.5f}\n"
-                f"   Take Profit: {take_profit:.5f}"
-            )
+            try:
+                profit_loss = (current_price - entry_price) if side == 'buy' else (entry_price - current_price)
+                profit_pct = (profit_loss / entry_price) * 100 if entry_price != 0 else 0
+                
+                status_message = f"📈 Position Update:\n" \
+                                f"   Entry: {entry_price}\n" \
+                                f"   Current: {current_price}\n" \
+                                f"   EMA: {ema_value}\n" \
+                                f"   P/L: {profit_loss:.5f} ({profit_pct:.2f}%)"
+                
+                if stop_loss is not None:
+                    status_message += f"\n   Stop Loss: {stop_loss}"
+                if take_profit is not None:
+                    status_message += f"\n   Take Profit: {take_profit}"
+                    
+                self.log_status(status_message)
+            except Exception as e:
+                self.log_status(f"⚠️ Error calculating position metrics: {e}")
             
             # Check if trailing stop loss is enabled
             if self.parameters['trailing_stop_loss']:
@@ -673,8 +718,8 @@ class EMATrendStrategy:
                     if pos['instrument'] == symbol:
                         symbol_positions.append(pos)
             
-            # If we have reached max positions, just monitor
-            if len(symbol_positions) >= self.parameters['max_concurrent_trades']:
+            # Always use max_concurrent_trades = 1
+            if len(symbol_positions) >= 1:
                 self.log_status(f"Maximum trades reached ({len(symbol_positions)}). Waiting for positions to close.")
                 return
             

@@ -445,7 +445,7 @@ class BollingerBandsStrategy:
         if 'XAU' in symbol:
             return 2  # 2 decimal places for Gold
         elif 'BTC' in symbol:
-            return 2  # 2 decimal places for Bitcoin
+            return 1  # 1 decimal place for Bitcoin (reduced from 2 to fix precision error)
         elif 'SPX' in symbol or 'NAS' in symbol:
             return 2  # 2 decimal places for indices
         else:

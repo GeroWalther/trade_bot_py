@@ -26,7 +26,13 @@ try:
     logger.info("Successfully initialized OANDA broker")
     
     # Initialize strategies
-    bb_strategy = BBStrategy(broker)
+    bb_strategy = BBStrategy(broker, parameters={
+        'symbol': 'BTC_USD',
+        'check_interval': 240,
+        'continue_after_trade': True,
+        'max_concurrent_trades': 1,
+        'risk_percent': 0.5  # Add risk_percent parameter (0.5%)
+    })
     ema_strategy = EMATrendStrategy(broker=broker, parameters={
         'symbol': 'BTC_USD',
         'check_interval': 240,
@@ -970,33 +976,60 @@ def set_manual_analysis():
 @app.route('/api/bots/<bot_id>/clear-logs', methods=['POST'])
 def clear_bot_logs(bot_id):
     """Clear logs for a specific bot - only when explicitly requested"""
-    if bot_id == 'bollinger_bands':
-        if not bb_strategy:
+    logger.info(f"Received request to clear logs for bot: {bot_id}")
+    
+    try:
+        if bot_id == 'bollinger_bands':
+            if not bb_strategy:
+                logger.error("Bollinger Bands strategy not initialized")
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Strategy not initialized'
+                }), 400
+                
+            result = bb_strategy.clear_logs()
+            logger.info(f"Cleared logs for Bollinger Bands strategy, result: {result}")
+            
+        elif bot_id == 'ema_strategy':
+            if not ema_strategy:
+                logger.error("EMA strategy not initialized")
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Strategy not initialized'
+                }), 400
+                
+            result = ema_strategy.clear_logs()
+            logger.info(f"Cleared logs for EMA strategy, result: {result}")
+                
+        elif bot_id in ai_strategies:
+            strategy_instance = ai_strategies[bot_id]
+            if strategy_instance:
+                result = strategy_instance.clear_logs()
+                logger.info(f"Cleared logs for AI strategy {bot_id}, result: {result}")
+            else:
+                logger.error(f"AI strategy {bot_id} exists but instance is None")
+                return jsonify({
+                    'status': 'error',
+                    'message': f'Strategy {bot_id} not properly initialized'
+                }), 400
+        else:
+            logger.error(f"Unknown bot ID: {bot_id}")
             return jsonify({
                 'status': 'error',
-                'message': 'Strategy not initialized'
-            }), 400
+                'message': f'Unknown bot ID: {bot_id}'
+            }), 404
             
-        bb_strategy.clear_logs()
+        return jsonify({
+            'status': 'success',
+            'message': f'Logs cleared for {bot_id}'
+        })
         
-    elif bot_id == 'ema_strategy':
-        if not ema_strategy:
-            return jsonify({
-                'status': 'error',
-                'message': 'Strategy not initialized'
-            }), 400
-            
-        ema_strategy.clear_logs()
-            
-    elif bot_id in ai_strategies:
-        strategy_instance = ai_strategies[bot_id]
-        if strategy_instance:
-            strategy_instance.clear_logs()
-        
-    return jsonify({
-        'status': 'success',
-        'message': f'Logs cleared for {bot_id}'
-    })
+    except Exception as e:
+        logger.error(f"Error clearing logs for {bot_id}: {str(e)}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': f'Error clearing logs: {str(e)}'
+        }), 500
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5002, debug=True) 
