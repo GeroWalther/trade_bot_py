@@ -61,6 +61,7 @@ class FilledPositions:
     def __iter__(self):
         return iter(self._positions)
 
+
     def clear(self):
         self._positions.clear()
 
