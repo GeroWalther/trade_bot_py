@@ -1,4 +1,4 @@
-# Use an official Python image
+# Use Python 3.10 base image
 FROM python:3.10
 
 # Set environment variables
@@ -15,21 +15,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     autoconf \
     && rm -rf /var/lib/apt/lists/*
 
-# Install TA-Lib from an alternative source
-RUN wget -q -O ta-lib-0.4.0-src.tar.gz "https://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz?download" \
+# Download and install TA-Lib from an alternative source
+RUN wget -O ta-lib-0.4.0-src.tar.gz https://github.com/TA-Lib/ta-lib/archive/refs/tags/0.4.0.tar.gz \
     && tar -xzf ta-lib-0.4.0-src.tar.gz \
-    && ls -l ta-lib-0.4.0 \
-    && cd ta-lib-0.4.0 \
+    && mv ta-lib-0.4.0 ta-lib \
+    && cd ta-lib \
     && ./configure --prefix=/usr \
     && make -j$(nproc) \
     && make install \
     && cd .. \
-    && rm -rf ta-lib-0.4.0 ta-lib-0.4.0-src.tar.gz
+    && rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
 
 # Set working directory
 WORKDIR /app
 
-# Copy requirements and install Python dependencies
+# Copy dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
