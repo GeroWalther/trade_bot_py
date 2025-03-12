@@ -4,32 +4,24 @@ FROM python:3.10
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 
-# Install system dependencies
+# Install system dependencies and prebuilt TA-Lib
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libssl-dev \
     libffi-dev \
     python3-dev \
+    python3-pip \
     wget \
     automake \
     autoconf \
+    libta-lib-dev \
+    ta-lib \
     && rm -rf /var/lib/apt/lists/*
-
-# Download and install TA-Lib from an alternative source
-RUN wget -O ta-lib-0.4.0-src.tar.gz https://github.com/TA-Lib/ta-lib/archive/refs/tags/0.4.0.tar.gz \
-    && tar -xzf ta-lib-0.4.0-src.tar.gz \
-    && mv ta-lib-0.4.0 ta-lib \
-    && cd ta-lib \
-    && ./configure --prefix=/usr \
-    && make -j$(nproc) \
-    && make install \
-    && cd .. \
-    && rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
 
 # Set working directory
 WORKDIR /app
 
-# Copy dependencies
+# Copy and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
