@@ -15,6 +15,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     autoconf \
     && rm -rf /var/lib/apt/lists/*
 
+RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
+RUN tar -xzf ta-lib-0.4.0-src.tar.gz
+RUN cd ta-lib/
+
+RUN ./configure -prefix=/usr
+RUN make
+
+RUN make install
+
 # Set working directory
 WORKDIR /app
 
