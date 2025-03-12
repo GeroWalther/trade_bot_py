@@ -18,12 +18,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install TA-Lib C library
 RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz \
     && tar -xvzf ta-lib-0.4.0-src.tar.gz \
-    && cd ta-lib/ \
+    && cd ta-lib-0.4.0/ \
     && ./configure --prefix=/usr \
     && make -j$(nproc) \
     && make install \
     && cd .. \
-    && rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
+    && rm -rf ta-lib-0.4.0 ta-lib-0.4.0-src.tar.gz
 
 # Set working directory
 WORKDIR /app
@@ -31,6 +31,9 @@ WORKDIR /app
 # Copy and install dependencies
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+
+# Ensure TA-Lib Python package is installed
+RUN pip install --no-cache-dir TA-Lib
 
 # Copy project files
 COPY . .
