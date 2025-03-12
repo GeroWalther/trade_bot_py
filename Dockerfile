@@ -1,19 +1,24 @@
-# Use a minimal Ubuntu base image
-FROM ubuntu:22.04
+# Use an official Python image
+FROM python:3.10
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.10 python3-pip python3-venv \
-    build-essential libssl-dev libffi-dev python3-dev \
-    wget automake autoconf \
+    build-essential \
+    libssl-dev \
+    libffi-dev \
+    python3-dev \
+    wget \
+    automake \
+    autoconf \
     && rm -rf /var/lib/apt/lists/*
 
-# Install TA-Lib C library
-RUN wget -q https://versaweb.dl.sourceforge.net/project/ta-lib/ta-lib/0.4.0/ta-lib-0.4.0-src.tar.gz \
+# Install TA-Lib from an alternative source
+RUN wget -q -O ta-lib-0.4.0-src.tar.gz "https://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz?download" \
     && tar -xzf ta-lib-0.4.0-src.tar.gz \
+    && ls -l ta-lib-0.4.0 \
     && cd ta-lib-0.4.0 \
     && ./configure --prefix=/usr \
     && make -j$(nproc) \
@@ -34,5 +39,5 @@ COPY . .
 # Expose necessary ports
 EXPOSE 5002 5005
 
-# Default command for docker-compose
+# Default command
 CMD ["bash"]
