@@ -15,8 +15,8 @@ RUN apt-get update && apt-get install -y \
 
 # Download and install TA-Lib
 RUN wget https://github.com/ta-lib/ta-lib/releases/download/v0.6.4/ta-lib_0.6.4_amd64.deb && \
-    sudo dpkg -i ta-lib_0.6.4_amd64.deb && \
-    && rm -rf ta-lib_0.6.4_amd64.deb
+    dpkg -i ta-lib_0.6.4_amd64.deb && \
+    rm -rf ta-lib_0.6.4_amd64.deb
 
 # Set working directory
 WORKDIR /app
