@@ -1,4 +1,3 @@
-ta-lib
 newsapi-python
 finnhub-python
 fredapi

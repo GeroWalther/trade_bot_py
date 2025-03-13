@@ -1,7 +1,7 @@
 # Use Python 3.10 base image
 FROM python:3.10
 
-# Install system dependencies (including TA-Lib dependencies)
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
     libssl-dev \
@@ -9,13 +9,7 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     wget \
     libatlas-base-dev \
-    automake \
-    autoconf \
     && rm -rf /var/lib/apt/lists/*
-
-# Download and install TA-Lib
-RUN wget https://github.com/ta-lib/ta-lib/releases/download/v0.6.1/ta-lib_0.6.1_amd64.deb && \
-    dpkg -i ta-lib_0.6.1_amd64.deb
 
 # Set working directory
 WORKDIR /app

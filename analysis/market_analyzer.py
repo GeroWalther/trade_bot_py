@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
-import talib
+# import talib  # Commented out ta-lib import
 import joblib
 import os
 
@@ -35,37 +35,190 @@ class TechnicalAnalyzer:
         
         return {
             # Trend Indicators
-            'sma_20': talib.SMA(close, timeperiod=20)[-1],
-            'sma_50': talib.SMA(close, timeperiod=50)[-1],
-            'sma_200': talib.SMA(close, timeperiod=200)[-1],
-            'ema_20': talib.EMA(close, timeperiod=20)[-1],
-            'ema_50': talib.EMA(close, timeperiod=50)[-1],
+            'sma_20': self._sma(close, 20)[-1],
+            'sma_50': self._sma(close, 50)[-1],
+            'sma_200': self._sma(close, 200)[-1],
+            'ema_20': self._ema(close, 20)[-1],
+            'ema_50': self._ema(close, 50)[-1],
             
             # Momentum Indicators
-            'rsi': talib.RSI(close)[-1],
-            'macd': talib.MACD(close)[0][-1],
-            'macd_signal': talib.MACD(close)[1][-1],
-            'macd_hist': talib.MACD(close)[2][-1],
-            'stoch_k': talib.STOCH(high, low, close)[0][-1],
-            'stoch_d': talib.STOCH(high, low, close)[1][-1],
-            'cci': talib.CCI(high, low, close)[-1],
-            'adx': talib.ADX(high, low, close)[-1],
+            'rsi': self._rsi(close)[-1],
+            'macd': self._macd(close)[0][-1],
+            'macd_signal': self._macd(close)[1][-1],
+            'macd_hist': self._macd(close)[2][-1],
+            'stoch_k': self._stochastic(high, low, close)[0][-1],
+            'stoch_d': self._stochastic(high, low, close)[1][-1],
+            'cci': self._cci(high, low, close)[-1],
+            'adx': self._adx(high, low, close)[-1],
             
             # Volatility Indicators
-            'atr': talib.ATR(high, low, close)[-1],
-            'bbands_upper': talib.BBANDS(close)[0][-1],
-            'bbands_middle': talib.BBANDS(close)[1][-1],
-            'bbands_lower': talib.BBANDS(close)[2][-1],
+            'atr': self._atr(high, low, close)[-1],
+            'bbands_upper': self._bbands(close)[0][-1],
+            'bbands_middle': self._bbands(close)[1][-1],
+            'bbands_lower': self._bbands(close)[2][-1],
             
             # Volume Indicators
-            'obv': talib.OBV(close, volume)[-1],
-            'mfi': talib.MFI(high, low, close, volume)[-1],
+            'obv': self._obv(close, volume)[-1],
+            'mfi': self._mfi(high, low, close, volume)[-1],
             
             # Additional Indicators
             'ichimoku': self._calculate_ichimoku(df),
             'support_resistance': self._find_support_resistance(df),
             'pivot_points': self._calculate_pivot_points(df)
         }
+
+    # Alternative implementations for technical indicators
+    def _sma(self, data, period):
+        """Simple Moving Average"""
+        return pd.Series(data).rolling(window=period).mean().values
+        
+    def _ema(self, data, period):
+        """Exponential Moving Average"""
+        return pd.Series(data).ewm(span=period, adjust=False).mean().values
+        
+    def _rsi(self, data, period=14):
+        """Relative Strength Index"""
+        delta = pd.Series(data).diff().dropna()
+        up, down = delta.copy(), delta.copy()
+        up[up < 0] = 0
+        down[down > 0] = 0
+        roll_up = up.rolling(period).mean()
+        roll_down = down.abs().rolling(period).mean()
+        rs = roll_up / roll_down
+        rsi = 100.0 - (100.0 / (1.0 + rs))
+        # Pad the beginning with NaN values to match the original length
+        padding = np.array([np.nan] * (len(data) - len(rsi)))
+        return np.concatenate([padding, rsi.values])
+        
+    def _macd(self, data, fast_period=12, slow_period=26, signal_period=9):
+        """Moving Average Convergence Divergence"""
+        ema_fast = pd.Series(data).ewm(span=fast_period, adjust=False).mean()
+        ema_slow = pd.Series(data).ewm(span=slow_period, adjust=False).mean()
+        macd_line = ema_fast - ema_slow
+        signal_line = macd_line.ewm(span=signal_period, adjust=False).mean()
+        histogram = macd_line - signal_line
+        return macd_line.values, signal_line.values, histogram.values
+        
+    def _stochastic(self, high, low, close, k_period=14, d_period=3):
+        """Stochastic Oscillator"""
+        high_series = pd.Series(high)
+        low_series = pd.Series(low)
+        close_series = pd.Series(close)
+        
+        # Calculate %K
+        lowest_low = low_series.rolling(window=k_period).min()
+        highest_high = high_series.rolling(window=k_period).max()
+        k = 100 * ((close_series - lowest_low) / (highest_high - lowest_low))
+        
+        # Calculate %D
+        d = k.rolling(window=d_period).mean()
+        
+        return k.values, d.values
+        
+    def _cci(self, high, low, close, period=14):
+        """Commodity Channel Index"""
+        tp = (high + low + close) / 3
+        tp_series = pd.Series(tp)
+        sma_tp = tp_series.rolling(window=period).mean()
+        mad = tp_series.rolling(window=period).apply(lambda x: np.abs(x - x.mean()).mean())
+        cci = (tp_series - sma_tp) / (0.015 * mad)
+        return cci.values
+        
+    def _adx(self, high, low, close, period=14):
+        """Average Directional Index"""
+        # This is a simplified implementation
+        high_series = pd.Series(high)
+        low_series = pd.Series(low)
+        close_series = pd.Series(close)
+        
+        # Calculate +DI and -DI
+        plus_dm = high_series.diff()
+        minus_dm = low_series.diff(-1).abs()
+        
+        plus_dm[plus_dm < 0] = 0
+        minus_dm[minus_dm < 0] = 0
+        
+        tr = pd.DataFrame({
+            'hl': high_series - low_series,
+            'hc': (high_series - close_series.shift()).abs(),
+            'lc': (low_series - close_series.shift()).abs()
+        }).max(axis=1)
+        
+        atr = tr.rolling(window=period).mean()
+        
+        plus_di = 100 * (plus_dm.rolling(window=period).mean() / atr)
+        minus_di = 100 * (minus_dm.rolling(window=period).mean() / atr)
+        
+        dx = 100 * ((plus_di - minus_di).abs() / (plus_di + minus_di))
+        adx = dx.rolling(window=period).mean()
+        
+        return adx.values
+        
+    def _atr(self, high, low, close, period=14):
+        """Average True Range"""
+        high_series = pd.Series(high)
+        low_series = pd.Series(low)
+        close_series = pd.Series(close)
+        
+        tr1 = high_series - low_series
+        tr2 = (high_series - close_series.shift()).abs()
+        tr3 = (low_series - close_series.shift()).abs()
+        
+        tr = pd.DataFrame({'tr1': tr1, 'tr2': tr2, 'tr3': tr3}).max(axis=1)
+        atr = tr.rolling(window=period).mean()
+        
+        return atr.values
+        
+    def _bbands(self, data, period=20, std_dev=2):
+        """Bollinger Bands"""
+        series = pd.Series(data)
+        sma = series.rolling(window=period).mean()
+        std = series.rolling(window=period).std()
+        upper_band = sma + (std * std_dev)
+        lower_band = sma - (std * std_dev)
+        
+        return upper_band.values, sma.values, lower_band.values
+        
+    def _obv(self, close, volume):
+        """On-Balance Volume"""
+        close_series = pd.Series(close)
+        volume_series = pd.Series(volume)
+        
+        obv = np.zeros_like(close)
+        obv[0] = volume[0]
+        
+        for i in range(1, len(close)):
+            if close[i] > close[i-1]:
+                obv[i] = obv[i-1] + volume[i]
+            elif close[i] < close[i-1]:
+                obv[i] = obv[i-1] - volume[i]
+            else:
+                obv[i] = obv[i-1]
+                
+        return obv
+        
+    def _mfi(self, high, low, close, volume, period=14):
+        """Money Flow Index"""
+        typical_price = (high + low + close) / 3
+        tp_series = pd.Series(typical_price)
+        vol_series = pd.Series(volume)
+        
+        money_flow = tp_series * vol_series
+        
+        # Get positive and negative money flow
+        diff = tp_series.diff()
+        positive_flow = pd.Series(np.where(diff > 0, money_flow, 0))
+        negative_flow = pd.Series(np.where(diff < 0, money_flow, 0))
+        
+        # Calculate money flow ratio
+        positive_mf = positive_flow.rolling(window=period).sum()
+        negative_mf = negative_flow.rolling(window=period).sum()
+        
+        # Calculate MFI
+        money_ratio = positive_mf / negative_mf
+        mfi = 100 - (100 / (1 + money_ratio))
+        
+        return mfi.values
 
     def _calculate_ichimoku(self, df: pd.DataFrame) -> Dict:
         """Calculate Ichimoku Cloud indicators"""
@@ -89,6 +242,48 @@ class TechnicalAnalyzer:
             'kijun': kijun.iloc[-1],
             'senkou_a': senkou_span_a.iloc[-1],
             'senkou_b': senkou_span_b.iloc[-1]
+        }
+        
+    def _find_support_resistance(self, df: pd.DataFrame) -> Dict:
+        """Find support and resistance levels"""
+        # Simple implementation - using recent highs and lows
+        close = df['close'].iloc[-1]
+        high = df['high']
+        low = df['low']
+        
+        # Find recent support (lowest low in last 20 periods)
+        support = low.rolling(window=20).min().iloc[-1]
+        
+        # Find recent resistance (highest high in last 20 periods)
+        resistance = high.rolling(window=20).max().iloc[-1]
+        
+        return {
+            'support': support,
+            'resistance': resistance
+        }
+        
+    def _calculate_pivot_points(self, df: pd.DataFrame) -> Dict:
+        """Calculate pivot points"""
+        # Use the most recent complete day
+        if len(df) < 1:
+            return {'pivot': 0, 'r1': 0, 's1': 0, 'r2': 0, 's2': 0}
+            
+        high = df['high'].iloc[-1]
+        low = df['low'].iloc[-1]
+        close = df['close'].iloc[-1]
+        
+        pivot = (high + low + close) / 3
+        r1 = (2 * pivot) - low
+        s1 = (2 * pivot) - high
+        r2 = pivot + (high - low)
+        s2 = pivot - (high - low)
+        
+        return {
+            'pivot': pivot,
+            'r1': r1,
+            's1': s1,
+            'r2': r2,
+            's2': s2
         }
 
 class MarketPredictor:
