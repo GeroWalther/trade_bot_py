@@ -1,7 +1,7 @@
 from quart import Blueprint, jsonify, request
 from services.market_intelligence_service import MarketIntelligenceService
 from services.market_data_service import MarketDataService
-from services.ai_analysis_service_new import AIAnalysisService
+# from services.ai_analysis_service_new import AIAnalysisService  # ML service removed
 import os
 import logging
 from functools import wraps
@@ -16,7 +16,7 @@ market_bp = Blueprint('market_intelligence', __name__)
 # Initialize service at module level
 market_service = MarketIntelligenceService()
 market_data_service = MarketDataService(alpha_vantage_key=os.getenv('ALPHA_VANTAGE_API_KEY'))
-ai_analysis_service = AIAnalysisService()
+# ai_analysis_service = AIAnalysisService()  # ML service removed
 
 # Simple rate limiting
 request_counts = defaultdict(lambda: {'count': 0, 'reset_time': 0})
@@ -93,25 +93,25 @@ async def get_historical_prices(symbol):
         logger.error(f"Error in route: {e}")
         return jsonify([])
 
-@market_bp.route('/api/test-indicators/<symbol>')
-@rate_limit(requests_per_minute=30)
-async def test_indicators(symbol):
-    try:
-        # Log all request parameters
-        logger.info(f"Request args: {dict(request.args)}")
-        timeframe = request.args.get('timeframe', 'SWING')
-        logger.info(f"Processing test_indicators request: symbol={symbol}, timeframe={timeframe}")
-        
-        analysis = await ai_analysis_service.get_technical_analysis(symbol, timeframe)
-        logger.info(f"Analysis completed. Config used: timeframe={timeframe}, status={analysis.get('status')}")
-        
-        return jsonify({
-            'status': 'success',
-            'data': analysis
-        })
-    except Exception as e:
-        logger.error(f"Error in test_indicators: {e}")
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }) 
+# @market_bp.route('/api/test-indicators/<symbol>')  # ML route removed
+# @rate_limit(requests_per_minute=30)
+# async def test_indicators(symbol):
+#     try:
+#         # Log all request parameters
+#         logger.info(f"Request args: {dict(request.args)}")
+#         timeframe = request.args.get('timeframe', 'SWING')
+#         logger.info(f"Processing test_indicators request: symbol={symbol}, timeframe={timeframe}")
+#         
+#         analysis = await ai_analysis_service.get_technical_analysis(symbol, timeframe)
+#         logger.info(f"Analysis completed. Config used: timeframe={timeframe}, status={analysis.get('status')}")
+#         
+#         return jsonify({
+#             'status': 'success',
+#             'data': analysis
+#         })
+#     except Exception as e:
+#         logger.error(f"Error in test_indicators: {e}")
+#         return jsonify({
+#             'status': 'error',
+#             'message': str(e)
+#         }) 

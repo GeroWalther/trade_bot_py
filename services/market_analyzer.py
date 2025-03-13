@@ -6,7 +6,7 @@ import oandapyV20.endpoints.instruments as instruments
 from config import OANDA_CREDS, ALPHA_VANTAGE_API_KEY
 from datetime import datetime, timedelta
 import yfinance as yf
-from textblob import TextBlob  # For basic sentiment analysis
+# from textblob import TextBlob  # For basic sentiment analysis
 from alpha_vantage.timeseries import TimeSeries
 from alpha_vantage.techindicators import TechIndicators
 import asyncio
@@ -59,7 +59,7 @@ class MarketAnalyzer:
         
         # Initialize services
         self._init_oanda()
-        self._init_ai_service()
+        # self._init_ai_service()  # Commented out AI service
 
     def _init_oanda(self):
         """Initialize OANDA connection"""
@@ -206,28 +206,13 @@ class MarketAnalyzer:
                 'economic_data': await self._fetch_economic_data(symbol)
             }
 
-            # Initialize AI service if needed
-            if not self.ai_service:
-                from services.ai_analysis_service import AIAnalysisService
-                self.ai_service = AIAnalysisService()
-                logger.info("AI service initialized on demand")
-
-            # Let AI analyze everything
-            analysis_input = {
+            # Return market data without AI analysis
+            return {
                 'symbol': symbol,
                 'timeframe': timeframe,
-                'risk_level': risk_level,
                 'market_data': market_data,
-                'request_type': 'full_analysis'
+                'timestamp': datetime.now().isoformat()
             }
-
-            # Get comprehensive AI analysis
-            analysis = await self.ai_service.generate_analysis(analysis_input)
-            
-            if not analysis:
-                return self._get_default_analysis(symbol, timeframe)
-                
-            return analysis
 
         except Exception as e:
             logger.error(f"Error in market analysis: {e}", exc_info=True)
@@ -477,11 +462,8 @@ class MarketAnalyzer:
 
     def _analyze_text_sentiment(self, text: str) -> float:
         """Analyze text sentiment using TextBlob"""
-        try:
-            analysis = TextBlob(text)
-            return analysis.sentiment.polarity  # Returns value between -1 and 1
-        except Exception:
-            return 0.0
+        # Sentiment analysis disabled
+        return 0.0
             
     async def _fetch_economic_data(self, symbol: str) -> Dict:
         """Fetch relevant economic indicators"""
