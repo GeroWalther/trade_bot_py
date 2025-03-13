@@ -1,4 +1,5 @@
 newsapi-python
+textblob
 lumibot
 finnhub-python
 fredapi
