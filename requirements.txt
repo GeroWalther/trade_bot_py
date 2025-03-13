@@ -4,6 +4,7 @@ textblob
 finnhub-python
 fredapi
 anthropic
+fastapi
 aiodns==3.1.1
 aiohttp==3.8.2
 aiosignal==1.3.1
