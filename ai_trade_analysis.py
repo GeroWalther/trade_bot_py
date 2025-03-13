@@ -1,5 +1,5 @@
 # This should be your AI analysis server
-from quart import Quart, jsonify, request
+from quart import Quart, jsonify
 from routes.analysis_routes import analysis_bp
 from routes.market_intelligence import market_bp
 from routes.ai_analysis_routes import ai_analysis_bp
@@ -8,8 +8,8 @@ from services.market_data_service import MarketDataService
 from services.market_analyzer import MarketAnalyzer
 import logging
 import os
-from datetime import datetime
-from fastapi import HTTPException
+# from datetime import datetime
+# from fastapi import HTTPException
 from quart_cors import cors
 
 # Configure logging - Set higher log levels to reduce output

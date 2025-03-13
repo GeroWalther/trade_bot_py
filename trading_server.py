@@ -6,7 +6,7 @@ import oandapyV20.endpoints.positions as positions
 import logging
 from datetime import datetime
 import pytz
-from trading_state import strategy, initialize_strategy
+# from trading_state import strategy, initialize_strategy
 from strategies.ema_trend import EMATrendStrategy
 from strategies.bb_strategy import BBStrategy
 from strategies.ai_strategy import AIStrategy
