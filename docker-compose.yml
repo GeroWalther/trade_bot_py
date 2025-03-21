@@ -15,7 +15,7 @@ services:
       - /var/run/docker.sock:/tmp/docker.sock:ro
       - certs:/etc/nginx/certs
       - vhost:/etc/nginx/vhost.d
-      - html:/usr/share/nginx/html
+      - html:/usr/share/nginx/html  # Shared volume for ACME challenges
     networks:
       - proxy_network
 
@@ -32,6 +32,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - certs:/etc/nginx/certs
       - acme:/etc/acme.sh
+      - html:/usr/share/nginx/html  # Ensure ACME challenge files are shared
     networks:
       - proxy_network
 
@@ -48,6 +49,9 @@ services:
       - VIRTUAL_HOST=trading-server.gw-intech.com
       - LETSENCRYPT_HOST=trading-server.gw-intech.com
       - VIRTUAL_PORT=5002
+    depends_on:
+      - nginx_proxy
+      - acme_companion
     networks:
       - proxy_network
 
@@ -64,6 +68,9 @@ services:
       - VIRTUAL_HOST=ai-trading-analysis.gw-intech.com
       - LETSENCRYPT_HOST=ai-trading-analysis.gw-intech.com
       - VIRTUAL_PORT=5005
+    depends_on:
+      - nginx_proxy
+      - acme_companion
     networks:
       - proxy_network
 
