@@ -9,25 +9,31 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      - ENABLE_LETSENCRYPT=true  # Ensure Let's Encrypt is enabled
+      - ENABLE_LETSENCRYPT=true  # Enable Let's Encrypt for SSL
       - HTTPS_METHOD=redirect    # Redirect HTTP to HTTPS
     volumes:
       - /var/run/docker.sock:/tmp/docker.sock:ro
       - certs:/etc/nginx/certs
       - vhost:/etc/nginx/vhost.d
       - html:/usr/share/nginx/html
+    networks:
+      - proxy_network
 
   acme_companion:
     image: nginxproxy/acme-companion
     container_name: acme_companion
     restart: always
+    depends_on:
+      - nginx_proxy
+    environment:
+      - NGINX_PROXY_CONTAINER=nginx_proxy  # Required for ACME companion
+      - DEFAULT_EMAIL=proavinashthakur@gmail.com
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - certs:/etc/nginx/certs
-      - vhost:/etc/nginx/vhost.d
-      - html:/usr/share/nginx/html
-    environment:
-      DEFAULT_EMAIL: "proavinashthakur@gmail.com"
+      - acme:/etc/acme.sh
+    networks:
+      - proxy_network
 
   trading_server:
     build: .
@@ -39,6 +45,8 @@ services:
       - VIRTUAL_HOST=trading-server.gw-intech.com
       - LETSENCRYPT_HOST=trading-server.gw-intech.com
       - VIRTUAL_PORT=5002
+    networks:
+      - proxy_network
 
   ai_trade_analysis:
     build: .
@@ -50,8 +58,15 @@ services:
       - VIRTUAL_HOST=ai-trading-analysis.gw-intech.com
       - LETSENCRYPT_HOST=ai-trading-analysis.gw-intech.com
       - VIRTUAL_PORT=5005
+    networks:
+      - proxy_network
 
 volumes:
   certs:
   vhost:
   html:
+  acme:
+
+networks:
+  proxy_network:
+    driver: bridge
