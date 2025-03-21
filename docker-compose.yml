@@ -1,18 +1,57 @@
 version: "3.8"
 
 services:
+  nginx_proxy:
+    image: nginxproxy/nginx-proxy
+    container_name: nginx_proxy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - ENABLE_LETSENCRYPT=true  # Ensure Let's Encrypt is enabled
+      - HTTPS_METHOD=redirect    # Redirect HTTP to HTTPS
+    volumes:
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+      - certs:/etc/nginx/certs
+      - vhost:/etc/nginx/vhost.d
+      - html:/usr/share/nginx/html
+
+  acme_companion:
+    image: nginxproxy/acme-companion
+    container_name: acme_companion
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - certs:/etc/nginx/certs
+      - vhost:/etc/nginx/vhost.d
+      - html:/usr/share/nginx/html
+    environment:
+      DEFAULT_EMAIL: "proavinashthakur@gmail.com"
+
   trading_server:
     build: .
     container_name: trading_server
     restart: always
-    ports:
-      - "5002:5002"
-    command: ["python", "trading_server.py"]
+    expose:
+      - "5002"
+    environment:
+      - VIRTUAL_HOST=trading-server.gw-intech.com
+      - LETSENCRYPT_HOST=trading-server.gw-intech.com
+      - VIRTUAL_PORT=5002
 
   ai_trade_analysis:
     build: .
     container_name: ai_trade_analysis
     restart: always
-    ports:
-      - "5005:5005"
-    command: ["python", "ai_trade_analysis.py"]
+    expose:
+      - "5005"
+    environment:
+      - VIRTUAL_HOST=ai-trading-analysis.gw-intech.com
+      - LETSENCRYPT_HOST=ai-trading-analysis.gw-intech.com
+      - VIRTUAL_PORT=5005
+
+volumes:
+  certs:
+  vhost:
+  html:
