@@ -39,6 +39,9 @@ services:
     build: .
     container_name: trading_server
     restart: always
+    ports:
+      - "5002:5002"
+    command: ["python", "trading_server.py"]
     expose:
       - "5002"
     environment:
@@ -52,8 +55,11 @@ services:
     build: .
     container_name: ai_trade_analysis
     restart: always
+    ports:
+      - "5005:5005"
     expose:
       - "5005"
+    command: ["python", "ai_trade_analysis.py"]
     environment:
       - VIRTUAL_HOST=ai-trading-analysis.gw-intech.com
       - LETSENCRYPT_HOST=ai-trading-analysis.gw-intech.com
