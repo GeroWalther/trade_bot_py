@@ -40,7 +40,6 @@ phases:
         mv /root/.env /root/trade_bot_py/.env  
 
         echo "Deploying with Docker..."
-        docker-compose down --remove-orphans
         docker-compose up -d --build
         docker system prune -af --volumes
         EOF
