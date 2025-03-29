@@ -41,7 +41,9 @@ phases:
 
         echo "Deploying with Docker..."
         docker-compose up -d --build
-        echo "docker system prune -af --volumes"
+        echo "Waiting for 10 seconds before cleaning up Docker..."
+        sleep 10
+        docker system prune -af --volumes
         EOF
 
       - echo "Cleaning up private key..."
