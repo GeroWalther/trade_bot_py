@@ -41,7 +41,7 @@ phases:
 
         echo "Deploying with Docker..."
         docker-compose up -d --build
-        docker system prune -af --volumes
+        echo "docker system prune -af --volumes"
         EOF
 
       - echo "Cleaning up private key..."
