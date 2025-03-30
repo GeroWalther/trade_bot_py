@@ -14,6 +14,15 @@ import threading
 import time
 from services.market_intelligence_service import MarketIntelligenceService
 import oandapyV20.endpoints.trades as trades
+from dotenv import load_dotenv
+import os
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Print environment variables for debugging
+print("AI_SERVER_URL:", os.getenv('AI_SERVER_URL'))
+print("TRADING_SERVER_URL:", os.getenv('TRADING_SERVER_URL'))
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

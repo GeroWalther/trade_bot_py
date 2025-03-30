@@ -1,19 +1,29 @@
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 import threading
 import time
-import json
 import aiohttp
 import asyncio
 import os
 import pickle
 import requests
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Debug print to check environment variables
+print("AI_SERVER_URL in ai_strategy.py:", os.getenv('AI_SERVER_URL'))
+print("TRADING_SERVER_URL in ai_strategy.py:", os.getenv('TRADING_SERVER_URL'))
 
 logger = logging.getLogger(__name__)
 
 class AIStrategy:
     def __init__(self, broker, parameters=None):
         logger.info(f"Initializing AI Strategy with parameters: {parameters}")
+        
+        # Debug print to check environment variables in __init__
+        print("AI_SERVER_URL in __init__:", os.getenv('AI_SERVER_URL'))
         
         self.broker = broker
         # Update available instruments to match the AI Analysis dropdown options
@@ -201,35 +211,55 @@ class AIStrategy:
             logger.info(f"Requesting AI analysis for {asset_name} ({trading_term}, {risk_level})")
             self.log_status(f"🔍 Requesting AI analysis for {asset_name} ({trading_term}, {risk_level})")
             
+            # Debug: Print environment variables
+            print("DEBUG - Environment variables in get_ai_analysis:")
+            print(f"AI_SERVER_URL: {os.getenv('AI_SERVER_URL')}")
+            print(f"TRADING_SERVER_URL: {os.getenv('TRADING_SERVER_URL')}")
+            
             async with aiohttp.ClientSession() as session:
-                url = "http://localhost:5005/api/advanced-market-analysis"
+                # Use the environment variable for the AI server URL
+                ai_server_url = os.getenv('AI_SERVER_URL', 'https://ai-trading-analysis.gw-intech.com/')
+                url = f"{ai_server_url}/api/advanced-market-analysis"
+                print(f"DEBUG - Using URL for AI analysis: {url}")
                 payload = {
                     "asset": asset_name,
                     "term": trading_term,
                     "riskLevel": risk_level
                 }
+                print(f"DEBUG - Request payload: {payload}")
                 
-                async with session.post(url, json=payload, timeout=60) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        if result.get('status') == 'success' and result.get('data'):
-                            self.ai_analysis = result['data']
-                            self.last_analysis_time = datetime.now()
-                            
-                            # Log the analysis summary - simplified to just one line
-                            self.log_status(f"✅ Received AI analysis for {asset_name}")
-                            
-                            # Return the analysis
-                            return self.ai_analysis
+                try:
+                    print(f"DEBUG - Sending POST request to {url}")
+                    async with session.post(url, json=payload, timeout=120) as response:
+                        print(f"DEBUG - Response status: {response.status}")
+                        if response.status == 200:
+                            result = await response.json()
+                            print(f"DEBUG - Response JSON: {result}")
+                            if result.get('status') == 'success' and result.get('data'):
+                                self.ai_analysis = result['data']
+                                self.last_analysis_time = datetime.now()
+                                
+                                # Log the analysis summary - simplified to just one line
+                                self.log_status(f"✅ Received AI analysis for {asset_name}")
+                                
+                                # Return the analysis
+                                return self.ai_analysis
+                            else:
+                                error_msg = result.get('message', 'Unknown error')
+                                self.log_status(f"❌ AI analysis failed: {error_msg}")
+                                return None
                         else:
-                            error_msg = result.get('message', 'Unknown error')
-                            self.log_status(f"❌ AI analysis failed: {error_msg}")
+                            response_text = await response.text()
+                            print(f"DEBUG - Response text: {response_text}")
+                            self.log_status(f"❌ AI analysis request failed with status {response.status}")
                             return None
-                    else:
-                        self.log_status(f"❌ AI analysis request failed with status {response.status}")
-                        return None
+                except Exception as e:
+                    print(f"DEBUG - Exception during request: {str(e)}")
+                    self.log_status(f"❌ Error during request: {str(e)}")
+                    raise e
                         
         except Exception as e:
+            print(f"DEBUG - Exception in get_ai_analysis: {str(e)}")
             self.log_status(f"❌ Error getting AI analysis: {str(e)}")
             logger.error(f"Error getting AI analysis: {e}", exc_info=True)
             return None
