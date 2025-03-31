@@ -51,12 +51,65 @@ async def fetch_market_data(symbol):
     try:
         # Map asset names to Yahoo Finance symbols
         yahoo_symbols = {
-            "nasdaq": "%5EIXIC",  # ^IXIC
-            "s&p500": "%5EGSPC",  # ^GSPC
-            "gold": "GC%3DF",     # GC=F
-            "usd/jpy": "JPY=X",   # JPY=X
-            "btcusd": "BTC-USD",  # BTC-USD
-            "eur/usd": "EUR=X"    # EUR=X
+            # Indices
+            "nasdaq": "%5EIXIC",      # ^IXIC (NASDAQ Composite)
+            "nasdaq100": "%5ENDX",    # ^NDX (NASDAQ-100)
+            "s&p500": "%5EGSPC",      # ^GSPC
+            "dow": "%5EDJI",          # ^DJI
+            "dax": "%5EGDAXI",        # ^GDAXI
+            "nikkei": "%5EN225",      # ^N225
+            "ftse100": "%5EFTSE",     # ^FTSE
+            
+            # Forex Pairs
+            "usd/jpy": "USDJPY=X",    # USDJPY=X
+            "eur/usd": "EURUSD=X",    # EURUSD=X
+            "gbp/usd": "GBPUSD=X",    # GBPUSD=X
+            "usd/cad": "USDCAD=X",    # USDCAD=X
+            "aud/usd": "AUDUSD=X",    # AUDUSD=X
+            "nzd/usd": "NZDUSD=X",    # NZDUSD=X
+            "usd/chf": "USDCHF=X",    # USDCHF=X
+            "eur/jpy": "EURJPY=X",    # EURJPY=X
+            "gbp/jpy": "GBPJPY=X",    # GBPJPY=X
+            "eur/gbp": "EURGBP=X",    # EURGBP=X
+            "eur/chf": "EURCHF=X",    # EURCHF=X
+            
+            # Commodities
+            "gold": "GC%3DF",         # GC=F
+            "silver": "SI%3DF",       # SI=F
+            "crude oil": "CL%3DF",    # CL=F
+            "brent oil": "BZ%3DF",    # BZ=F
+            "palladium": "PA%3DF",    # PA=F
+            "platinum": "PL%3DF",     # PL=F
+            "copper": "HG%3DF",       # HG=F
+            
+            # Cryptocurrencies
+            "bitcoin": "BTC-USD",     # BTC-USD
+            "ethereum": "ETH-USD",    # ETH-USD
+            "solana": "SOL-USD",      # SOL-USD
+            "cardano": "ADA-USD",     # ADA-USD
+            "polkadot": "DOT-USD",    # DOT-USD
+            "ripple": "XRP-USD",      # XRP-USD
+            
+            # Major Stocks
+            "apple": "AAPL",          # AAPL
+            "microsoft": "MSFT",      # MSFT
+            "amazon": "AMZN",         # AMZN
+            "tesla": "TSLA",          # TSLA
+            "meta": "META",           # META
+            "google": "GOOGL",        # GOOGL
+            "nvidia": "NVDA",         # NVDA
+            "netflix": "NFLX",        # NFLX
+            "disney": "DIS",          # DIS
+            "mcdonalds": "MCD",       # MCD
+            "coca cola": "KO",        # KO
+            "pepsi": "PEP",           # PEP
+            "visa": "V",              # V
+            "mastercard": "MA",       # MA
+            "jpmorgan": "JPM",        # JPM
+            "bank of america": "BAC", # BAC
+            "walmart": "WMT",         # WMT
+            "home depot": "HD",       # HD
+            "procter & gamble": "PG"  # PG
         }
         
         symbol_lower = symbol.lower()
@@ -192,29 +245,214 @@ async def advanced_market_analysis():
 
         # Map asset names to their Yahoo Finance and TradingView URLs
         asset_urls = {
+            # Indices
             "nasdaq": {
                 "yahoo": "https://finance.yahoo.com/quote/%5EIXIC/",
                 "tradingview": "https://www.tradingview.com/symbols/NASDAQ-IXIC/technicals/"
+            },
+            "nasdaq100": {
+                "yahoo": "https://finance.yahoo.com/quote/%5ENDX/",
+                "tradingview": "https://www.tradingview.com/symbols/NASDAQ-NDX/technicals/"
             },
             "s&p500": {
                 "yahoo": "https://finance.yahoo.com/quote/%5EGSPC/",
                 "tradingview": "https://www.tradingview.com/symbols/SPX/technicals/"
             },
-            "gold": {
-                "yahoo": "https://finance.yahoo.com/quote/GC%3DF/",
-                "tradingview": "https://www.tradingview.com/symbols/COMEX-GC1!/technicals/"
+            "dow": {
+                "yahoo": "https://finance.yahoo.com/quote/%5EDJI/",
+                "tradingview": "https://www.tradingview.com/symbols/TVC-DJI/technicals/"
             },
+            "dax": {
+                "yahoo": "https://finance.yahoo.com/quote/%5EGDAXI/",
+                "tradingview": "https://www.tradingview.com/symbols/CAPITALCOM-DE40/ideas/"
+            },
+            "nikkei": {
+                "yahoo": "https://finance.yahoo.com/quote/%5EN225/",
+                "tradingview": "https://www.tradingview.com/symbols/CAPITALCOM-J225/ideas/"
+            },
+            "ftse100": {
+                "yahoo": "https://finance.yahoo.com/quote/%5EFTSE/",
+                "tradingview": "https://www.tradingview.com/symbols/CAPITALCOM-UK100/ideas/"
+            },
+            
+            # Forex Pairs
             "usd/jpy": {
                 "yahoo": "https://finance.yahoo.com/quote/JPY=X/",
                 "tradingview": "https://www.tradingview.com/symbols/USDJPY/technicals/"
             },
-            "btcusd": {
-                "yahoo": "https://finance.yahoo.com/quote/BTC-USD/",
-                "tradingview": "https://www.tradingview.com/symbols/BTCUSD/technicals/"
-            },
             "eur/usd": {
                 "yahoo": "https://finance.yahoo.com/quote/EURUSD=X/",
                 "tradingview": "https://www.tradingview.com/symbols/EURUSD/technicals/"
+            },
+            "gbp/usd": {
+                "yahoo": "https://finance.yahoo.com/quote/GBP=X/",
+                "tradingview": "https://www.tradingview.com/symbols/GBPUSD/technicals/"
+            },
+            "usd/cad": {
+                "yahoo": "https://finance.yahoo.com/quote/CAD=X/",
+                "tradingview": "https://www.tradingview.com/symbols/USDCAD/technicals/"
+            },
+            "aud/usd": {
+                "yahoo": "https://finance.yahoo.com/quote/AUD=X/",
+                "tradingview": "https://www.tradingview.com/symbols/AUDUSD/technicals/"
+            },
+            "nzd/usd": {
+                "yahoo": "https://finance.yahoo.com/quote/NZD=X/",
+                "tradingview": "https://www.tradingview.com/symbols/NZDUSD/technicals/"
+            },
+            "usd/chf": {
+                "yahoo": "https://finance.yahoo.com/quote/CHF=X/",
+                "tradingview": "https://www.tradingview.com/symbols/USDCHF/technicals/"
+            },
+            "eur/jpy": {
+                "yahoo": "https://finance.yahoo.com/quote/EURJPY=X/",
+                "tradingview": "https://www.tradingview.com/symbols/EURJPY/technicals/"
+            },
+            "gbp/jpy": {
+                "yahoo": "https://finance.yahoo.com/quote/GBPJPY=X/",
+                "tradingview": "https://www.tradingview.com/symbols/GBPJPY/technicals/"
+            },
+            "eur/gbp": {
+                "yahoo": "https://finance.yahoo.com/quote/EURGBP=X/",
+                "tradingview": "https://www.tradingview.com/symbols/EURGBP/technicals/"
+            },
+            "eur/chf": {
+                "yahoo": "https://finance.yahoo.com/quote/EURCHF=X/",
+                "tradingview": "https://www.tradingview.com/symbols/EURCHF/technicals/"
+            },
+            
+            # Commodities
+            "gold": {
+                "yahoo": "https://finance.yahoo.com/quote/GC%3DF/",
+                "tradingview": "https://www.tradingview.com/symbols/COMEX-GC1!/technicals/"
+            },
+            "silver": {
+                "yahoo": "https://finance.yahoo.com/quote/SI%3DF/",
+                "tradingview": "https://www.tradingview.com/symbols/COMEX-SI1!/technicals/"
+            },
+            "crude oil": {
+                "yahoo": "https://finance.yahoo.com/quote/CL%3DF/",
+                "tradingview": "https://www.tradingview.com/symbols/NYMEX-CL1!/technicals/"
+            },
+            "brent oil": {
+                "yahoo": "https://finance.yahoo.com/quote/BZ%3DF/",
+                "tradingview": "https://www.tradingview.com/symbols/ICE-B1!/technicals/"
+            },
+            "palladium": {
+                "yahoo": "https://finance.yahoo.com/quote/PA%3DF/",
+                "tradingview": "https://www.tradingview.com/symbols/NYMEX-PA1!/technicals/"
+            },
+            "platinum": {
+                "yahoo": "https://finance.yahoo.com/quote/PL%3DF/",
+                "tradingview": "https://www.tradingview.com/symbols/NYMEX-PL1!/technicals/"
+            },
+            "copper": {
+                "yahoo": "https://finance.yahoo.com/quote/HG%3DF/",
+                "tradingview": "https://www.tradingview.com/symbols/COMEX-HG1!/technicals/"
+            },
+            
+            # Cryptocurrencies
+            "bitcoin": {
+                "yahoo": "https://finance.yahoo.com/quote/BTC-USD/",
+                "tradingview": "https://www.tradingview.com/symbols/BTCUSD/technicals/"
+            },
+            "ethereum": {
+                "yahoo": "https://finance.yahoo.com/quote/ETH-USD/",
+                "tradingview": "https://www.tradingview.com/symbols/ETHUSD/technicals/"
+            },
+            "solana": {
+                "yahoo": "https://finance.yahoo.com/quote/SOL-USD/",
+                "tradingview": "https://www.tradingview.com/symbols/SOLUSD/technicals/"
+            },
+            "cardano": {
+                "yahoo": "https://finance.yahoo.com/quote/ADA-USD/",
+                "tradingview": "https://www.tradingview.com/symbols/ADAUSD/technicals/"
+            },
+            "polkadot": {
+                "yahoo": "https://finance.yahoo.com/quote/DOT-USD/",
+                "tradingview": "https://www.tradingview.com/symbols/DOTUSD/technicals/"
+            },
+            "ripple": {
+                "yahoo": "https://finance.yahoo.com/quote/XRP-USD/",
+                "tradingview": "https://www.tradingview.com/symbols/XRPUSD/technicals/"
+            },
+            
+            # Major Stocks
+            "apple": {
+                "yahoo": "https://finance.yahoo.com/quote/AAPL/",
+                "tradingview": "https://www.tradingview.com/symbols/AAPL/technicals/"
+            },
+            "microsoft": {
+                "yahoo": "https://finance.yahoo.com/quote/MSFT/",
+                "tradingview": "https://www.tradingview.com/symbols/MSFT/technicals/"
+            },
+            "amazon": {
+                "yahoo": "https://finance.yahoo.com/quote/AMZN/",
+                "tradingview": "https://www.tradingview.com/symbols/AMZN/technicals/"
+            },
+            "tesla": {
+                "yahoo": "https://finance.yahoo.com/quote/TSLA/",
+                "tradingview": "https://www.tradingview.com/symbols/TSLA/technicals/"
+            },
+            "meta": {
+                "yahoo": "https://finance.yahoo.com/quote/META/",
+                "tradingview": "https://www.tradingview.com/symbols/META/technicals/"
+            },
+            "google": {
+                "yahoo": "https://finance.yahoo.com/quote/GOOGL/",
+                "tradingview": "https://www.tradingview.com/symbols/GOOGL/technicals/"
+            },
+            "nvidia": {
+                "yahoo": "https://finance.yahoo.com/quote/NVDA/",
+                "tradingview": "https://www.tradingview.com/symbols/NVDA/technicals/"
+            },
+            "netflix": {
+                "yahoo": "https://finance.yahoo.com/quote/NFLX/",
+                "tradingview": "https://www.tradingview.com/symbols/NFLX/technicals/"
+            },
+            "disney": {
+                "yahoo": "https://finance.yahoo.com/quote/DIS/",
+                "tradingview": "https://www.tradingview.com/symbols/DIS/technicals/"
+            },
+            "mcdonalds": {
+                "yahoo": "https://finance.yahoo.com/quote/MCD/",
+                "tradingview": "https://www.tradingview.com/symbols/MCD/technicals/"
+            },
+            "coca cola": {
+                "yahoo": "https://finance.yahoo.com/quote/KO/",
+                "tradingview": "https://www.tradingview.com/symbols/KO/technicals/"
+            },
+            "pepsi": {
+                "yahoo": "https://finance.yahoo.com/quote/PEP/",
+                "tradingview": "https://www.tradingview.com/symbols/PEP/technicals/"
+            },
+            "visa": {
+                "yahoo": "https://finance.yahoo.com/quote/V/",
+                "tradingview": "https://www.tradingview.com/symbols/V/technicals/"
+            },
+            "mastercard": {
+                "yahoo": "https://finance.yahoo.com/quote/MA/",
+                "tradingview": "https://www.tradingview.com/symbols/MA/technicals/"
+            },
+            "jpmorgan": {
+                "yahoo": "https://finance.yahoo.com/quote/JPM/",
+                "tradingview": "https://www.tradingview.com/symbols/JPM/technicals/"
+            },
+            "bank of america": {
+                "yahoo": "https://finance.yahoo.com/quote/BAC/",
+                "tradingview": "https://www.tradingview.com/symbols/BAC/technicals/"
+            },
+            "walmart": {
+                "yahoo": "https://finance.yahoo.com/quote/WMT/",
+                "tradingview": "https://www.tradingview.com/symbols/WMT/technicals/"
+            },
+            "home depot": {
+                "yahoo": "https://finance.yahoo.com/quote/HD/",
+                "tradingview": "https://www.tradingview.com/symbols/HD/technicals/"
+            },
+            "procter & gamble": {
+                "yahoo": "https://finance.yahoo.com/quote/PG/",
+                "tradingview": "https://www.tradingview.com/symbols/PG/technicals/"
             }
         }
         
