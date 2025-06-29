@@ -4,6 +4,7 @@ import asyncio
 import logging
 import sys
 import os
+from datetime import datetime
 
 # Add the project root to the path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -755,6 +756,201 @@ async def modify_position():
 app.register_blueprint(trading_bp)
 app.register_blueprint(analysis_bp)
 app.register_blueprint(ai_analysis_bp)
+
+@app.route('/ai-chat', methods=['POST'])
+async def ai_chat():
+    """AI Finance Expert Chat with web search capabilities"""
+    global master_bot
+    
+    try:
+        data = await request.get_json()
+        user_message = data.get('message', '')
+        conversation_history = data.get('conversation_history', [])
+        
+        logger.info(f"AI Chat request: {user_message}")
+        
+        # Always ensure we have a master bot instance for market data access
+        if not master_bot:
+            master_bot = MasterTradingBot()
+        
+        # Always get user's position data for personalized advice
+        user_positions = {}
+        account_balance = 0
+        total_unrealized_pl = 0
+        
+        try:
+            if master_bot and hasattr(master_bot, 'broker'):
+                # Get account balance using the correct method
+                cash, unrealized_pl, total_value = master_bot.broker._get_balances_at_broker()
+                account_balance = cash
+                total_unrealized_pl = unrealized_pl
+                
+                # Get current positions
+                positions = master_bot.broker.get_tracked_positions()
+                if positions:
+                    user_positions = positions
+        except Exception as e:
+            logger.warning(f"Could not fetch position data: {e}")
+        
+        logger.info(f"AI Chat request with user positions: {len(user_positions)} positions")
+        
+        # Create finance expert prompt
+        system_prompt = f"""You are a highly experienced and knowledgeable financial advisor and market strategist. You provide decisive, specific analysis and actionable recommendations based on your expertise.
+
+RESPONSE REQUIREMENTS:
+1. **Be Decisive**: Give specific recommendations based on your analysis - no "if you think" or "monitor upcoming" language
+2. **Actionable**: State what you would specifically do and why
+3. **Professional**: Provide confident expert analysis
+
+QUESTION TYPES:
+- **General Market Questions** (e.g., "What's happening in markets today?"): Focus on BROAD analysis across ALL major asset classes (stocks, bonds, currencies, commodities, crypto). Only briefly mention user's position if directly relevant.
+- **Position-Specific Questions** (e.g., "Should I hold my EUR/USD trade?"): Focus primarily on their actual trades and P/L with detailed analysis.
+- **Educational Questions**: Focus on teaching concepts without necessarily referencing positions.
+
+Recent Conversation:
+{format_conversation_history(conversation_history)}
+
+IMPORTANT NOTE: You do not have real-time web browsing capabilities. Provide analysis based on your training data and knowledge. Do not claim to search the web or provide current URLs.
+
+Question: {user_message}
+
+Account Status (reference only when relevant to their specific question):
+- Balance: {account_balance:,.2f}€
+- Unrealized P/L: {total_unrealized_pl:+.2f}€
+- Active Trades: {len(user_positions)}
+{format_user_positions(user_positions) if user_positions else 'No open positions currently'}
+
+Provide specific, actionable analysis based on your financial expertise:"""
+
+        # Call AI service for response
+        try:
+            # Create a simple AI service for chat responses
+            from services.simple_ai_service import SimpleAIService
+            ai_service = SimpleAIService()
+            
+            # Use OpenAI directly for chat response
+            if ai_service.client:
+                response = ai_service.client.chat.completions.create(
+                    model="gpt-4o",  # Use full gpt-4o for browsing capabilities
+                    messages=[{
+                        "role": "user", 
+                        "content": system_prompt
+                    }],
+                    max_tokens=800,
+                    temperature=0.3
+                )
+                response_text = response.choices[0].message.content
+                
+                # Extract sources from AI response
+                extracted_sources = extract_sources_from_response(response_text)
+                
+                # No fake sources - only show real URLs if AI actually found them
+                
+            else:
+                # Simple error message
+                response_text = "I apologize, but I'm unable to access the AI service at the moment. Please try again in a few moments."
+                extracted_sources = []
+                
+        except Exception as e:
+            logger.error(f"AI service error: {e}")
+            response_text = "I apologize, but I'm experiencing technical difficulties. Please try again in a moment."
+            extracted_sources = []
+        
+        # Format response
+        response_data = {
+            'response': response_text,
+            'sources': extracted_sources,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        return jsonify(response_data)
+        
+    except Exception as e:
+        logger.error(f"Error in AI chat: {e}", exc_info=True)
+        return jsonify({
+            'response': "I apologize, but I'm experiencing technical difficulties. Please try again in a moment.",
+            'sources': [],
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+
+def format_conversation_history(history):
+    """Format conversation history for AI context"""
+    if not history:
+        return "This is the start of the conversation."
+    
+    formatted = []
+    for msg in history[-3:]:  # Last 3 messages for context
+        role = "User" if msg.get('type') == 'user' else "AI"
+        content = msg.get('content', '')[:200]  # Limit length
+        formatted.append(f"{role}: {content}")
+    
+    return '\n'.join(formatted)
+
+def format_user_positions(positions):
+    """Format user positions for AI context"""
+    if not positions:
+        return "No open positions currently"
+    
+    formatted = []
+    for pos_id, pos in positions.items():
+        symbol = pos.get('symbol', 'Unknown')
+        side = pos.get('side', 'Unknown')
+        quantity = pos.get('quantity', 0)
+        entry_price = pos.get('entry_price', 0)
+        current_price = pos.get('current_price', 0)
+        pl_euro = pos.get('pl_euro', 0)
+        profit_pct = pos.get('profit_pct', 0)
+        
+        formatted.append(f"• {symbol} {side}: {quantity:,.0f} units @ {entry_price:.5f} → {current_price:.5f} | P/L: {pl_euro:+.2f}€ ({profit_pct:+.1f}%)")
+    
+    return '\n'.join(formatted)
+
+
+
+def extract_sources_from_response(response_text):
+    """Extract REAL sources from AI response - only if actual URLs are found"""
+    import re
+    from datetime import datetime
+    
+    sources = []
+    
+    try:
+        # Look for full URLs with proper protocol
+        urls = re.findall(r'https?://[^\s\)\]\,\.\;]+(?:\.[^\s\)\]\,\;\:]+)*', response_text)
+        
+        if urls:
+            # Take first 3-5 unique URLs and validate they're real URLs
+            unique_urls = []
+            for url in urls:
+                # Clean up URL (remove any trailing punctuation)
+                clean_url = re.sub(r'[.,;:!?)\]]+$', '', url)
+                # Only include if it has a proper domain structure
+                if '.' in clean_url and len(clean_url) > 10 and 'www' not in clean_url.lower()[:10]:
+                    unique_urls.append(clean_url)
+            
+            unique_urls = list(dict.fromkeys(unique_urls))[:5]  # Remove duplicates
+            
+            for i, url in enumerate(unique_urls):
+                # Extract domain name for better title
+                domain_match = re.search(r'//(?:www\.)?([^/]+)', url)
+                domain = domain_match.group(1) if domain_match else f'Source {i+1}'
+                
+                sources.append({
+                    'title': f'{domain.title()}',
+                    'snippet': 'Financial news source referenced in analysis',
+                    'url': url,
+                    'timestamp': datetime.now().isoformat()
+                })
+        
+        # If no valid URLs found, return empty array (no fake sources)
+        
+    except Exception as e:
+        logger.warning(f"Error extracting sources: {e}")
+    
+    return sources
+
 
 if __name__ == '__main__':
     print("""
