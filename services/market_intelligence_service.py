@@ -69,6 +69,9 @@ class MarketIntelligenceService:
         
         # Initialize cache with much longer expiry (4 hours)
         self.cache = Cache(expiry_minutes=240)  # Default 4 hour cache for all market data
+        
+        # Initialize AI analysis - simplified for local testing
+        self.ai_analysis = self
 
         # ONLY WORKING FRED SERIES
         self.series_ids = {
@@ -512,7 +515,7 @@ class MarketIntelligenceService:
             # Gather all data concurrently
             market_data, economic_data, news_data, technical_data = await asyncio.gather(
                 self._get_market_data(asset),
-                self._get_economic_indicators(asset),
+                self.get_economic_indicators(),
                 self._get_market_news(asset),
                 self._get_technical_analysis(asset)
             )
@@ -524,7 +527,7 @@ class MarketIntelligenceService:
             )
             
             # Get AI analysis
-            ai_analysis = await self.ai_analysis.generate_market_analysis(
+            ai_analysis = await self.generate_market_analysis(
                 asset=asset,
                 market_data=market_data,
                 economic_data=economic_data,
@@ -554,7 +557,7 @@ class MarketIntelligenceService:
             # Gather all data concurrently for efficiency
             market_data, economic_data, news_data = await asyncio.gather(
                 self._get_market_data(asset),
-                self._get_economic_indicators(asset),
+                self.get_economic_indicators(),
                 self._get_market_news(asset)
             )
 
@@ -761,6 +764,150 @@ class MarketIntelligenceService:
         sentiment_scores = [n['sentiment'] for n in news_data]
         average_sentiment = sum(sentiment_scores) / len(sentiment_scores)
         return average_sentiment
+
+    async def _get_technical_analysis(self, asset: str) -> Dict:
+        """Get technical analysis for an asset"""
+        try:
+            # Get market data for technical analysis
+            market_data = await self._get_market_data(asset)
+            
+            # Return technical analysis based on market data
+            return {
+                'indicators': market_data.get('indicators', {}),
+                'signals': market_data.get('signals', {}),
+                'trend': market_data.get('signals', {}).get('trend', {}).get('primary', 'NEUTRAL'),
+                'strength': market_data.get('signals', {}).get('trend', {}).get('strength', 'MODERATE')
+            }
+        except Exception as e:
+            logger.error(f"Error getting technical analysis for {asset}: {e}")
+            return {
+                'indicators': {},
+                'signals': {},
+                'trend': 'NEUTRAL',
+                'strength': 'MODERATE'
+            }
+
+    async def generate_market_analysis(self, asset: str, market_data: Dict, economic_data: Dict, 
+                                     news_data: Dict, technical_data: Dict, 
+                                     probability_analysis: Dict) -> Dict:
+        """Generate simplified AI market analysis"""
+        try:
+            # Extract key data points
+            current_price = market_data.get('current_price', 0)
+            rsi = market_data.get('indicators', {}).get('rsi', 50)
+            trend = technical_data.get('trend', 'NEUTRAL')
+            
+            # Simple decision logic
+            if rsi < 30 and trend == 'BULLISH':
+                direction = 'LONG'
+                confidence = 75
+                rationale = f"RSI oversold ({rsi:.1f}) with bullish trend - potential reversal"
+            elif rsi > 70 and trend == 'BEARISH':
+                direction = 'SHORT'
+                confidence = 75
+                rationale = f"RSI overbought ({rsi:.1f}) with bearish trend - potential reversal"
+            elif trend == 'BULLISH' and rsi < 70:
+                direction = 'LONG'
+                confidence = 65
+                rationale = f"Bullish trend with RSI not overbought ({rsi:.1f}) - trend continuation"
+            elif trend == 'BEARISH' and rsi > 30:
+                direction = 'SHORT'
+                confidence = 65
+                rationale = f"Bearish trend with RSI not oversold ({rsi:.1f}) - trend continuation"
+            else:
+                direction = 'NEUTRAL'
+                confidence = 50
+                rationale = "Mixed signals - neutral stance recommended"
+            
+            # Calculate target prices
+            volatility = 0.02  # 2% default volatility
+            if direction == 'LONG':
+                entry_price = current_price * 1.001  # Slight premium
+                take_profit = current_price * (1 + volatility * 2)
+                stop_loss = current_price * (1 - volatility)
+            elif direction == 'SHORT':
+                entry_price = current_price * 0.999  # Slight discount
+                take_profit = current_price * (1 - volatility * 2)
+                stop_loss = current_price * (1 + volatility)
+            else:
+                entry_price = current_price
+                take_profit = current_price * 1.01
+                stop_loss = current_price * 0.99
+            
+            return {
+                'trading_strategy': {
+                    'direction': direction,
+                    'rationale': rationale,
+                    'confidence': confidence,
+                    'entry': {
+                        'price': entry_price,
+                        'rationale': f"Entry near current price with {direction.lower()} bias"
+                    },
+                    'take_profit_1': {
+                        'price': take_profit,
+                        'rationale': f"Target based on {volatility*200:.0f}% volatility expectation"
+                    },
+                    'stop_loss': {
+                        'price': stop_loss,
+                        'rationale': f"Risk management at {volatility*100:.0f}% distance"
+                    }
+                },
+                'market_summary': f"{asset} analysis based on technical indicators",
+                'key_drivers': [f"RSI: {rsi:.1f}", f"Trend: {trend}", f"Price: {current_price}"],
+                'risk_assessment': f"Moderate risk - {confidence}% confidence in {direction} direction"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error generating market analysis: {e}")
+            return {
+                'trading_strategy': {
+                    'direction': 'NEUTRAL',
+                    'rationale': 'Error in analysis - neutral stance',
+                    'entry': {'price': 0, 'rationale': 'No entry recommended'},
+                    'take_profit_1': {'price': 0, 'rationale': 'No target set'},
+                    'stop_loss': {'price': 0, 'rationale': 'No stop loss set'}
+                },
+                'market_summary': 'Analysis unavailable',
+                'key_drivers': ['Error in data processing'],
+                'risk_assessment': 'High risk due to analysis error'
+            }
+
+    def _calculate_probabilities(self, technical_data: Dict, timeframe: str) -> Dict:
+        """Calculate probability analysis"""
+        try:
+            trend = technical_data.get('trend', 'NEUTRAL')
+            strength = technical_data.get('strength', 'MODERATE')
+            
+            # Simple probability calculation based on trend and strength
+            if trend == 'BULLISH':
+                if strength == 'STRONG':
+                    prob_up = 70
+                else:
+                    prob_up = 60
+            elif trend == 'BEARISH':
+                if strength == 'STRONG':
+                    prob_up = 30
+                else:
+                    prob_up = 40
+            else:
+                prob_up = 50
+            
+            return {
+                'probability_up': prob_up,
+                'probability_down': 100 - prob_up,
+                'confidence': 65 if strength == 'STRONG' else 50,
+                'methodology': 'Technical trend analysis',
+                'timeframe': timeframe
+            }
+        except Exception as e:
+            logger.error(f"Error calculating probabilities: {e}")
+            return {
+                'probability_up': 50,
+                'probability_down': 50,
+                'confidence': 50,
+                'methodology': 'Default neutral',
+                'timeframe': timeframe
+            }
 
     async def _get_market_data(self, asset: str) -> Dict:
         """Get market data including Alpha Vantage indicators"""

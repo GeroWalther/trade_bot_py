@@ -11,7 +11,7 @@ OANDA_CREDS = {
     'ACCESS_TOKEN': os.getenv('OANDA_ACCESS_TOKEN'),
     'ACCOUNT_ID': os.getenv('OANDA_ACCOUNT_ID'),
     'ENVIRONMENT': 'practice',  # or 'live' for real trading
-    'API_URL': os.getenv('TRADING_SERVER_URL', 'https://trading-server.gw-intech.com/')  # Default to deployed server if not specified
+    'API_URL': os.getenv('TRADING_SERVER_URL', 'http://localhost:5003/')  # Default to local server if not specified
 }
 
 # Validate configuration

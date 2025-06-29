@@ -218,7 +218,7 @@ class AIStrategy:
             
             async with aiohttp.ClientSession() as session:
                 # Use the environment variable for the AI server URL
-                ai_server_url = os.getenv('AI_SERVER_URL', 'https://ai-trading-analysis.gw-intech.com/')
+                ai_server_url = os.getenv('AI_SERVER_URL', 'http://localhost:5003/')
                 url = f"{ai_server_url}/api/advanced-market-analysis"
                 print(f"DEBUG - Using URL for AI analysis: {url}")
                 payload = {

@@ -87,7 +87,7 @@ class OandaTrader:
         self._orders = {}  # Add this line for tracking orders
         self._held_trades = {}  # Add this line
         # Add API URL for the trading server
-        self.api_url = os.getenv('TRADING_SERVER_URL', 'https://trading-server.gw-intech.com/')  # Default to deployed server
+        self.api_url = os.getenv('TRADING_SERVER_URL', 'http://localhost:5003/')  # Default to local server
         # If API_URL is provided in credentials, use that instead
         if "API_URL" in credentials:
             self.api_url = credentials["API_URL"]
