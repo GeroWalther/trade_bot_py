@@ -6,6 +6,8 @@ from services.cache_service import Cache
 from oandapyV20 import API
 from oandapyV20.endpoints.instruments import InstrumentsCandles
 import os
+import pandas as pd
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -163,3 +165,57 @@ class MarketDataService:
         except Exception as e:
             logger.error(f"Error in get_historical_prices: {e}")
             return [] 
+
+    def get_historical_candles_for_bot(self, symbol: str, timeframe: str = '5M', count: int = 100):
+        """Get historical candle data for bot analysis"""
+        try:
+            # Mock historical data for now - in production, integrate with OANDA historical API
+            end_time = datetime.now()
+            time_delta = timedelta(minutes=5) if timeframe == '5M' else timedelta(hours=1)
+            
+            data = []
+            base_price = 1.0850 if 'EUR_USD' in symbol else 1.2500  # Mock base prices
+            
+            for i in range(count):
+                timestamp = end_time - (time_delta * (count - i))
+                
+                # Generate random price movement
+                price_change = np.random.normal(0, 0.001)  # Small random changes
+                base_price += price_change
+                
+                # Generate OHLC
+                high = base_price + abs(np.random.normal(0, 0.0005))
+                low = base_price - abs(np.random.normal(0, 0.0005))
+                open_price = base_price + np.random.normal(0, 0.0002)
+                close_price = base_price + np.random.normal(0, 0.0002)
+                
+                data.append({
+                    'timestamp': timestamp.isoformat(),
+                    'open': round(open_price, 5),
+                    'high': round(high, 5),
+                    'low': round(low, 5),
+                    'close': round(close_price, 5),
+                    'volume': np.random.randint(1000, 5000)
+                })
+            
+            return data
+            
+        except Exception as e:
+            logger.error(f"Error getting historical data for {symbol}: {e}")
+            return []
+
+    def get_current_price_action(self, symbol: str):
+        """Get current price action for a symbol"""
+        try:
+            # This would integrate with your existing broker price feeds
+            # For now, return mock data
+            return {
+                'symbol': symbol,
+                'bid': 1.0850,
+                'ask': 1.0852,
+                'spread': 0.0002,
+                'timestamp': datetime.now().isoformat()
+            }
+        except Exception as e:
+            logger.error(f"Error getting price action for {symbol}: {e}")
+            return None 

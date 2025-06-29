@@ -13,6 +13,8 @@ from strategies.ai_strategy import AIStrategy
 import threading
 import time
 from services.market_intelligence_service import MarketIntelligenceService
+from services.custom_bot_service import CustomBotService
+from routes.custom_bot_routes import create_custom_bot_routes
 import oandapyV20.endpoints.trades as trades
 from dotenv import load_dotenv
 import os
@@ -125,7 +127,14 @@ try:
     # Initialize market intelligence service
     market_intelligence = MarketIntelligenceService()
     
-    logger.info("Successfully initialized strategies")
+    # Initialize custom bot service
+    custom_bot_service = CustomBotService(broker)
+    
+    # Register custom bot routes
+    custom_bot_routes = create_custom_bot_routes(custom_bot_service)
+    app.register_blueprint(custom_bot_routes)
+    
+    logger.info("Successfully initialized strategies and custom bot service")
 except Exception as e:
     logger.error(f"Error initializing broker or strategies: {e}", exc_info=True)
     broker = None
@@ -137,6 +146,7 @@ except Exception as e:
     ai_eurusd_strategy = None
     ai_nasdaq_strategy = None
     ai_strategies = {}
+    custom_bot_service = None
 
 @app.route('/execute-trade', methods=['POST'])
 def execute_trade():
