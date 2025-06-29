@@ -173,14 +173,30 @@ class OandaTrader:
         
     def _get_balances_at_broker(self, *args, **kwargs):
         try:
+            # Get account balance
             r = accounts.AccountSummary(self.account_id)
             response = self.api.request(r)
-            
             cash = float(response['account']['balance'])
-            positions_value = float(response['account']['unrealizedPL'])
-            total_value = cash + positions_value
             
-            return cash, positions_value, total_value
+            # Calculate unrealized P/L from all positions instead of using account summary
+            total_unrealized_pl = 0.0
+            try:
+                # Get all tracked positions with their individual P/L
+                tracked_positions = self.get_tracked_positions()
+                for position_key, position_data in tracked_positions.items():
+                    pl_euro = position_data.get('pl_euro', 0.0)
+                    if pl_euro is not None:
+                        total_unrealized_pl += float(pl_euro)
+                
+                logging.info(f"Calculated total unrealized P/L from positions: {total_unrealized_pl}€")
+            except Exception as e:
+                logging.error(f"Error calculating unrealized P/L from positions: {e}")
+                # Fallback to account summary value
+                total_unrealized_pl = float(response['account'].get('unrealizedPL', 0))
+            
+            total_value = cash + total_unrealized_pl
+            
+            return cash, total_unrealized_pl, total_value
         except Exception as e:
             print(f"Error getting balances: {e}")
             return self._cash, 0, self._cash

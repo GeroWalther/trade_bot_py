@@ -374,31 +374,97 @@ async def get_performance():
 # Trading status endpoint (for backward compatibility)
 @app.route('/trading-status', methods=['GET'])
 async def get_trading_status():
-    """Get trading status - compatibility endpoint"""
+    """Get trading status - compatibility endpoint for MarketOverview"""
     global master_bot
     
     try:
+        # Always ensure we have a master bot instance for account data
         if not master_bot:
-            return jsonify({
-                'status': 'success',
-                'data': {
-                    'active_positions': [],
-                    'account_balance': 0,
-                    'today_pnl': 0,
-                    'bot_status': 'stopped'
+            master_bot = MasterTradingBot()
+        
+        # Get account balances from broker
+        try:
+            cash, unrealized_pl, total_value = master_bot.broker._get_balances_at_broker()
+        except Exception:
+            # Fallback values if broker is not available
+            cash = 10000.0
+            unrealized_pl = 0.0
+            total_value = 10000.0
+        
+        # Get current market prices
+        market_prices = {}
+        for symbol in master_bot.instruments.keys():
+            try:
+                price = master_bot.broker.get_last_price(symbol)
+                if price:
+                    market_prices[symbol] = {'price': price}
+            except Exception:
+                # Skip symbols that can't get prices
+                continue
+        
+        # Get actual positions from OANDA broker
+        positions = {}
+        try:
+            # Get all open positions from broker
+            oanda_positions = master_bot.broker.get_tracked_positions()
+            
+            for position_id, position_data in oanda_positions.items():
+                # Use the correct field names from get_tracked_positions()
+                symbol = position_data.get('symbol', '')
+                quantity = position_data.get('quantity', 0)
+                entry_price = position_data.get('entry_price', 0)
+                current_price = position_data.get('current_price', entry_price)
+                pl_euro = position_data.get('pl_euro', 0)
+                profit_pct = position_data.get('profit_pct', 0)
+                side = position_data.get('side', 'LONG')
+                trade_id = position_data.get('trade_id', position_id)
+                
+                if abs(quantity) > 0:  # Only include positions with actual quantity
+                    positions[position_id] = {
+                        'symbol': symbol,
+                        'trade_id': trade_id,
+                        'side': side,
+                        'quantity': abs(quantity),
+                        'entry_price': entry_price,
+                        'current_price': current_price,
+                        'take_profit': None,  # OANDA doesn't provide TP in position data
+                        'stop_loss': None,    # OANDA doesn't provide SL in position data
+                        'pl_euro': pl_euro,
+                        'profit_pct': profit_pct
+                    }
+        except Exception as e:
+            logger.error(f"Error getting OANDA positions: {e}")
+            # Fallback to master bot position if OANDA fails
+            if master_bot.current_position:
+                pos = master_bot.current_position
+                position_key = f"{pos['symbol']}_{pos['entry_time'].strftime('%Y%m%d_%H%M%S')}"
+                positions[position_key] = {
+                    'symbol': pos['symbol'],
+                    'trade_id': pos['order_id'],
+                    'side': pos['direction'],
+                    'quantity': pos['position_size'],
+                    'entry_price': pos['entry_price'],
+                    'current_price': market_prices.get(pos['symbol'], {}).get('price', pos['entry_price']),
+                    'take_profit': pos.get('take_profit'),
+                    'stop_loss': pos.get('stop_loss'),
+                    'pl_euro': (market_prices.get(pos['symbol'], {}).get('price', pos['entry_price']) - pos['entry_price']) * pos['position_size'],
+                    'profit_pct': ((market_prices.get(pos['symbol'], {}).get('price', pos['entry_price']) - pos['entry_price']) / pos['entry_price']) * 100 if pos['entry_price'] > 0 else 0
                 }
-            })
         
         return jsonify({
-            'status': 'success',
-            'data': {
-                'active_positions': [master_bot.current_position] if master_bot.current_position else [],
-                'account_balance': 10000,  # Mock data
-                'today_pnl': master_bot.performance_metrics['total_profit_loss'],
-                'bot_status': 'running' if master_bot.is_running else 'stopped',
-                'total_trades': master_bot.performance_metrics['total_trades'],
-                'win_rate': master_bot.performance_metrics['win_rate']
-            }
+            'account': {
+                'balance': cash,
+                'unrealized_pl': unrealized_pl,
+                'total_value': total_value
+            },
+            'market_prices': market_prices,
+            'positions': positions,
+            'pending_orders': [],  # Master bot doesn't use pending orders currently
+            'trades': [],  # Simplified for now
+            'bot_status': 'running' if master_bot.is_running else 'stopped',
+            'active_positions': list(positions.values()) if positions else [],
+            'total_trades': master_bot.performance_metrics.get('total_trades', 0),
+            'win_rate': master_bot.performance_metrics.get('win_rate', 0)
         })
         
     except Exception as e:
@@ -417,6 +483,273 @@ async def health_check():
         'message': 'Master Trading Server is running',
         'bot_status': 'running' if (master_bot and master_bot.is_running) else 'stopped'
     })
+
+# Trading endpoints for MarketOverview frontend compatibility
+@app.route('/execute-trade', methods=['POST'])
+async def execute_trade():
+    """Execute a trade order"""
+    global master_bot
+    
+    try:
+        # Always ensure we have a master bot instance for broker access
+        if not master_bot:
+            master_bot = MasterTradingBot()
+        
+        data = await request.get_json()
+        logger.info(f"Received trade request: {data}")
+        
+        symbol = data.get('symbol', 'EUR_USD')
+        side = data.get('side', 'buy')
+        quantity = data.get('quantity', 1000)
+        order_type = data.get('order_type', 'market')
+        price = data.get('price')  # Entry price for pending orders
+        take_profit = data.get('take_profit')  # Take profit price
+        stop_loss = data.get('stop_loss')  # Stop loss price
+        
+        logger.info(f"Processed request parameters: symbol={symbol}, side={side}, quantity={quantity}, order_type={order_type}, price={price}, take_profit={take_profit}, stop_loss={stop_loss}")
+        
+        # Check if market is open for this symbol
+        if not master_bot.broker.is_market_open(symbol):
+            logger.error(f"Market is closed for {symbol}")
+            return jsonify({
+                'status': 'error',
+                'message': f'Market is closed for {symbol}',
+                'error_code': 'MARKET_HALTED'
+            }), 400
+        
+        # Build order object
+        if order_type == 'pending':
+            if not price:
+                logger.error("Price is required for pending orders")
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Price is required for pending orders'
+                }), 400
+                
+            order = {
+                'strategy': None,
+                'symbol': symbol,
+                'quantity': quantity,
+                'side': side,
+                'order_type': 'pending',
+                'price': price,
+                'take_profit': take_profit,
+                'stop_loss': stop_loss,
+                'position_fill': 'OPEN_ONLY'  # Prevent closing existing positions
+            }
+        else:
+            # For market orders
+            order = {
+                'strategy': None,
+                'symbol': symbol,
+                'quantity': quantity,
+                'side': side,
+                'order_type': 'market',
+                'take_profit': take_profit,
+                'stop_loss': stop_loss,
+                'position_fill': 'DEFAULT'  # Allow both opening and closing
+            }
+        
+        logger.info(f"Submitting order to broker: {order}")
+        try:
+            order_id = master_bot.broker.submit_order(order)
+            logger.info(f"Broker response - order_id: {order_id}")
+        except Exception as e:
+            error_message = str(e)
+            logger.error(f"Error submitting order: {error_message}", exc_info=True)
+            
+            # Check for specific error messages
+            if "MARKET_HALTED" in error_message:
+                return jsonify({
+                    'status': 'error',
+                    'message': f'Trading for {symbol} is currently halted. Please try again later or choose a different instrument.',
+                    'error_code': 'MARKET_HALTED'
+                }), 400
+            
+            return jsonify({
+                'status': 'error',
+                'message': f'Order submission error: {error_message}'
+            }), 400
+        
+        if order_id:
+            # For pending orders, don't expect an immediate position
+            if order_type == 'pending':
+                return jsonify({
+                    'status': 'success',
+                    'order_id': order_id,
+                    'message': 'Pending order created successfully'
+                }), 200
+            
+            # For market orders, check the position
+            positions = master_bot.broker.get_tracked_positions()
+            position_info = positions.get(symbol, {})
+            logger.info(f"Updated position info: {position_info}")
+            
+            response = {
+                'status': 'success',
+                'order_id': order_id,
+                'message': 'Order executed successfully',
+                'position': position_info
+            }
+            logger.info(f"Sending success response: {response}")
+            return jsonify(response), 200
+            
+        response = {
+            'status': 'error',
+            'message': 'Order submission failed'
+        }
+        logger.error(f"Order submission failed - no order_id returned")
+        return jsonify(response), 400
+        
+    except Exception as e:
+        error_response = {
+            'status': 'error',
+            'message': str(e)
+        }
+        logger.error(f"Exception in execute_trade: {e}", exc_info=True)
+        return jsonify(error_response), 500
+
+@app.route('/close-position/<trade_id>', methods=['POST'])
+async def close_position(trade_id):
+    """Close a specific position"""
+    global master_bot
+    
+    try:
+        # Always ensure we have a master bot instance for broker access
+        if not master_bot:
+            master_bot = MasterTradingBot()
+        
+        # Get current positions before closing
+        initial_positions = master_bot.broker.get_tracked_positions()
+        
+        # Find the position with the given trade ID
+        position = None
+        for pos_key, pos_data in initial_positions.items():
+            if pos_data.get('trade_id') == trade_id:
+                position = pos_data
+                break
+                
+        if not position:
+            return jsonify({
+                'status': 'error',
+                'message': 'No position found with the given trade ID'
+            }), 404
+            
+        order = {
+            'strategy': None,
+            'symbol': position['symbol'],
+            'quantity': abs(position['quantity']),
+            'side': 'sell' if position['quantity'] > 0 else 'buy'
+        }
+        
+        logger.info(f"Closing position for trade ID {trade_id}: {order}")
+        order_id = master_bot.broker.submit_order(order)
+        
+        # Verify position was actually closed by checking updated positions
+        updated_positions = master_bot.broker.get_tracked_positions()
+        position_still_exists = False
+        for pos_data in updated_positions.values():
+            if pos_data.get('trade_id') == trade_id:
+                position_still_exists = True
+                break
+                
+        if not position_still_exists:
+            # Position was successfully closed
+            return jsonify({
+                'status': 'success',
+                'order_id': order_id,
+                'message': 'Position closed successfully'
+            }), 200
+            
+        # Position still exists - closing failed
+        return jsonify({
+            'status': 'error',
+            'message': 'Position closing failed - position still exists'
+        }), 400
+        
+    except Exception as e:
+        logger.error(f"Error closing position: {e}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/cancel-order/<order_id>', methods=['POST'])
+async def cancel_order(order_id):
+    """Cancel a pending order"""
+    global master_bot
+    
+    try:
+        # Always ensure we have a master bot instance for broker access
+        if not master_bot:
+            master_bot = MasterTradingBot()
+        
+        logger.info(f"Canceling order: {order_id}")
+        success = master_bot.broker.cancel_order(order_id)
+        
+        if success:
+            return jsonify({
+                'status': 'success',
+                'message': 'Order canceled successfully'
+            }), 200
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': 'Failed to cancel order'
+            }), 400
+            
+    except Exception as e:
+        logger.error(f"Error canceling order: {e}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/modify-position', methods=['POST'])
+async def modify_position():
+    """Modify a position's take profit and stop loss"""
+    global master_bot
+    
+    try:
+        # Always ensure we have a master bot instance for broker access
+        if not master_bot:
+            master_bot = MasterTradingBot()
+        
+        data = await request.get_json()
+        trade_id = data.get('trade_id')
+        take_profit = data.get('take_profit')
+        stop_loss = data.get('stop_loss')
+        
+        logger.info(f"Modifying position {trade_id}: TP={take_profit}, SL={stop_loss}")
+        
+        # Get current positions to find the trade
+        positions = master_bot.broker.get_tracked_positions()
+        position = None
+        for pos_data in positions.values():
+            if pos_data.get('trade_id') == trade_id:
+                position = pos_data
+                break
+                
+        if not position:
+            return jsonify({
+                'status': 'error',
+                'message': 'Position not found'
+            }), 404
+        
+        # Note: OANDA doesn't support modifying TP/SL on existing positions directly
+        # This would require closing the position and opening a new one with TP/SL
+        # For now, return a message indicating this limitation
+        return jsonify({
+            'status': 'error',
+            'message': 'Position modification not supported by OANDA. Please close the position and create a new one with desired TP/SL.'
+        }), 400
+        
+    except Exception as e:
+        logger.error(f"Error modifying position: {e}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 # Register existing blueprints (for backward compatibility)
 app.register_blueprint(trading_bp)
