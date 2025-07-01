@@ -1,7 +1,7 @@
 from typing import Dict, Optional, List
 import logging
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from services.cache_service import Cache
 from oandapyV20 import API
 from oandapyV20.endpoints.instruments import InstrumentsCandles
@@ -12,12 +12,12 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 class MarketDataService:
-    def __init__(self, alpha_vantage_key: str):
+    def __init__(self):
         self.cache = Cache(expiry_minutes=240)  # 4 hour cache
         
         # Initialize OANDA client with correct env variables
         self.oanda = API(
-            access_token=os.getenv('OANDA_ACCESS_TOKEN'),  # Changed from OANDA_API_KEY
+            access_token=os.getenv('OANDA_ACCESS_TOKEN'),
             environment=os.getenv('OANDA_ENVIRONMENT', 'practice')
         )
         self.account_id = os.getenv('OANDA_ACCOUNT_ID')

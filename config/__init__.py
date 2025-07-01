@@ -5,21 +5,27 @@ import os
 from dotenv import load_dotenv
 import logging
 
-logger = logging.getLogger(__name__)
-
 # Load environment variables
 load_dotenv()
 
-# Add NEWS_API_KEY here
+# Configure logger
+logger = logging.getLogger(__name__)
+
+# OANDA Configuration
+OANDA_CREDS = {
+    "ACCOUNT_ID": os.getenv('OANDA_ACCOUNT_ID'),
+    "ACCESS_TOKEN": os.getenv('OANDA_ACCESS_TOKEN'),
+    "ENVIRONMENT": os.getenv('OANDA_ENVIRONMENT', 'practice')  # or 'live'
+}
+
+# API Keys
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 NEWS_API_KEY = os.getenv('NEWS_API_KEY')
+MARKET_NEWS_API_KEY = os.getenv('MARKET_NEWS_API_KEY')
+
+# Add NEWS_API_KEY here
 if not NEWS_API_KEY:
     logger.error("NEWS_API_KEY not found in environment variables")
     raise ValueError("NEWS_API_KEY not found in environment variables")
-
-# FRED API key
-FRED_API_KEY = os.getenv('FRED_API_KEY')
-
-# Alpha Vantage API key
-ALPHA_VANTAGE_API_KEY = os.getenv('ALPHA_VANTAGE_API_KEY')
 
 __all__ = ['OANDA_CREDS', 'validate_api_keys'] 

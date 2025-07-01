@@ -4,16 +4,17 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-REQUIRED_API_KEYS = {
+# Required API keys for core functionality
+REQUIRED_KEYS = {
     'OANDA_ACCESS_TOKEN': 'OANDA trading access',
     'OANDA_ACCOUNT_ID': 'OANDA account',
     'OPENAI_API_KEY': 'OpenAI analysis',
+    'NEWS_API_KEY': 'Market news'
 }
 
-OPTIONAL_API_KEYS = {
-    'NEWS_API_KEY': 'Market news',
-    'FRED_API_KEY': 'Economic indicators',
-    'ALPHA_VANTAGE_KEY': 'Market data'
+# Optional API keys for enhanced features
+OPTIONAL_KEYS = {
+    # Remove ALPHA_VANTAGE_KEY since we're not using it anymore
 }
 
 def validate_api_keys() -> Dict[str, bool]:
@@ -21,7 +22,7 @@ def validate_api_keys() -> Dict[str, bool]:
     status = {}
     
     # Check required keys
-    for key, description in REQUIRED_API_KEYS.items():
+    for key, description in REQUIRED_KEYS.items():
         value = os.getenv(key)
         if not value:
             logger.error(f"Missing {description} API key: {key}")
@@ -31,7 +32,7 @@ def validate_api_keys() -> Dict[str, bool]:
             status[key] = True
     
     # Check optional keys (warn but don't fail)
-    for key, description in OPTIONAL_API_KEYS.items():
+    for key, description in OPTIONAL_KEYS.items():
         value = os.getenv(key)
         if not value:
             logger.warning(f"Optional {description} API key not found: {key}")
@@ -41,7 +42,7 @@ def validate_api_keys() -> Dict[str, bool]:
             status[key] = True
             
     # Only fail if required keys are missing
-    required_status = {k: status[k] for k in REQUIRED_API_KEYS.keys()}
+    required_status = {k: status[k] for k in REQUIRED_KEYS.keys()}
     if not all(required_status.values()):
         missing_keys = [k for k, v in required_status.items() if not v]
         raise ValueError(f"Missing required API keys: {', '.join(missing_keys)}")
