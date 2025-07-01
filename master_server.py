@@ -773,6 +773,21 @@ async def ai_chat():
         if not master_bot:
             master_bot = MasterTradingBot()
         
+        # Initialize Google Search Service
+        from services.google_search_service import GoogleSearchService
+        search_service = GoogleSearchService()
+        
+        # Check if we need to perform web search
+        search_results = []
+        web_context = ""
+        
+        if search_service.should_search_web(user_message):
+            logger.info(f"Performing web search for query: {user_message}")
+            search_results = search_service.search_financial_news(user_message)
+            if search_results:
+                web_context = search_service.format_search_context(search_results)
+                logger.info(f"Found {len(search_results)} search results")
+        
         # Always get user's position data for personalized advice
         user_positions = {}
         account_balance = 0
@@ -794,13 +809,14 @@ async def ai_chat():
         
         logger.info(f"AI Chat request with user positions: {len(user_positions)} positions")
         
-        # Create finance expert prompt
-        system_prompt = f"""You are a highly experienced and knowledgeable financial advisor and market strategist. You provide decisive, specific analysis and actionable recommendations based on your expertise.
+        # Create enhanced finance expert prompt with web context
+        base_prompt = f"""You are a highly experienced and knowledgeable financial advisor and market strategist. You provide decisive, specific analysis and actionable recommendations based on your expertise.
 
 RESPONSE REQUIREMENTS:
 1. **Be Decisive**: Give specific recommendations based on your analysis - no "if you think" or "monitor upcoming" language
 2. **Actionable**: State what you would specifically do and why
 3. **Professional**: Provide confident expert analysis
+4. **Current**: When web search results are provided, integrate them into your analysis for the most up-to-date insights
 
 QUESTION TYPES:
 - **General Market Questions** (e.g., "What's happening in markets today?"): Focus on BROAD analysis across ALL major asset classes (stocks, bonds, currencies, commodities, crypto). Only briefly mention user's position if directly relevant.
@@ -810,7 +826,7 @@ QUESTION TYPES:
 Recent Conversation:
 {format_conversation_history(conversation_history)}
 
-IMPORTANT NOTE: You do not have real-time web browsing capabilities. Provide analysis based on your training data and knowledge. Do not claim to search the web or provide current URLs.
+{web_context}
 
 Question: {user_message}
 
@@ -820,7 +836,7 @@ Account Status (reference only when relevant to their specific question):
 - Active Trades: {len(user_positions)}
 {format_user_positions(user_positions) if user_positions else 'No open positions currently'}
 
-Provide specific, actionable analysis based on your financial expertise:"""
+Provide specific, actionable analysis based on your financial expertise and any current market information provided above:"""
 
         # Call AI service for response
         try:
@@ -831,20 +847,18 @@ Provide specific, actionable analysis based on your financial expertise:"""
             # Use OpenAI directly for chat response
             if ai_service.client:
                 response = ai_service.client.chat.completions.create(
-                    model="gpt-4o",  # Use full gpt-4o for browsing capabilities
+                    model="gpt-4o",  # Use full gpt-4o for enhanced capabilities
                     messages=[{
                         "role": "user", 
-                        "content": system_prompt
+                        "content": base_prompt
                     }],
-                    max_tokens=800,
+                    max_tokens=1000,  # Increased for more detailed responses
                     temperature=0.3
                 )
                 response_text = response.choices[0].message.content
                 
-                # Extract sources from AI response
-                extracted_sources = extract_sources_from_response(response_text)
-                
-                # No fake sources - only show real URLs if AI actually found them
+                # Use search results as sources instead of extracting from response
+                extracted_sources = search_service.extract_sources_for_frontend(search_results) if search_results else []
                 
             else:
                 # Simple error message
@@ -860,7 +874,8 @@ Provide specific, actionable analysis based on your financial expertise:"""
         response_data = {
             'response': response_text,
             'sources': extracted_sources,
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'web_search_performed': len(search_results) > 0
         }
         
         return jsonify(response_data)
@@ -870,7 +885,8 @@ Provide specific, actionable analysis based on your financial expertise:"""
         return jsonify({
             'response': "I apologize, but I'm experiencing technical difficulties. Please try again in a moment.",
             'sources': [],
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'web_search_performed': False
         }), 500
 
 
@@ -909,47 +925,7 @@ def format_user_positions(positions):
 
 
 
-def extract_sources_from_response(response_text):
-    """Extract REAL sources from AI response - only if actual URLs are found"""
-    import re
-    from datetime import datetime
-    
-    sources = []
-    
-    try:
-        # Look for full URLs with proper protocol
-        urls = re.findall(r'https?://[^\s\)\]\,\.\;]+(?:\.[^\s\)\]\,\;\:]+)*', response_text)
-        
-        if urls:
-            # Take first 3-5 unique URLs and validate they're real URLs
-            unique_urls = []
-            for url in urls:
-                # Clean up URL (remove any trailing punctuation)
-                clean_url = re.sub(r'[.,;:!?)\]]+$', '', url)
-                # Only include if it has a proper domain structure
-                if '.' in clean_url and len(clean_url) > 10 and 'www' not in clean_url.lower()[:10]:
-                    unique_urls.append(clean_url)
-            
-            unique_urls = list(dict.fromkeys(unique_urls))[:5]  # Remove duplicates
-            
-            for i, url in enumerate(unique_urls):
-                # Extract domain name for better title
-                domain_match = re.search(r'//(?:www\.)?([^/]+)', url)
-                domain = domain_match.group(1) if domain_match else f'Source {i+1}'
-                
-                sources.append({
-                    'title': f'{domain.title()}',
-                    'snippet': 'Financial news source referenced in analysis',
-                    'url': url,
-                    'timestamp': datetime.now().isoformat()
-                })
-        
-        # If no valid URLs found, return empty array (no fake sources)
-        
-    except Exception as e:
-        logger.warning(f"Error extracting sources: {e}")
-    
-    return sources
+# Google CSE integration functions moved to services/google_search_service.py
 
 
 if __name__ == '__main__':
