@@ -22,3 +22,6 @@ numpy>=1.26.3
 plotly>=5.18.0
 Quart
 APScheduler>=3.10.4
+supabase>=2.0.0
+pyjwt>=2.8.0
+cryptography>=41.0.0

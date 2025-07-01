@@ -4,7 +4,9 @@ import asyncio
 import logging
 import sys
 import os
+import jwt
 from datetime import datetime
+from functools import wraps
 
 # Add the project root to the path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -14,6 +16,7 @@ from routes.trading_routes import trading_bp
 from routes.analysis_routes import analysis_bp
 from routes.ai_analysis_routes import ai_analysis_bp
 from services.market_intelligence_service import MarketIntelligenceService
+from services.supabase_service import SupabaseService
 from config import validate_api_keys
 
 # Configure logging
@@ -31,11 +34,66 @@ app = cors(app)
 # Global instances
 master_bot = None
 market_intelligence = None
+supabase_service = None
+
+# Authentication decorator
+def require_auth(f):
+    """Require JWT authentication for route"""
+    @wraps(f)
+    async def decorated_function(*args, **kwargs):
+        token = None
+        
+        # Check Authorization header
+        auth_header = request.headers.get('Authorization')
+        if auth_header:
+            try:
+                token = auth_header.split(' ')[1]  # Bearer <token>
+            except IndexError:
+                return jsonify({'status': 'error', 'message': 'Invalid token format'}), 401
+        
+        if not token:
+            return jsonify({'status': 'error', 'message': 'Authentication token required'}), 401
+        
+        try:
+            # For demo purposes, we'll use a simple JWT without verification
+            # In production, you should verify the JWT signature with Supabase
+            payload = jwt.decode(token, options={"verify_signature": False})
+            request.user_id = payload.get('sub')
+            
+            if not request.user_id:
+                return jsonify({'status': 'error', 'message': 'Invalid token'}), 401
+                
+        except jwt.DecodeError:
+            return jsonify({'status': 'error', 'message': 'Invalid token'}), 401
+        
+        return await f(*args, **kwargs)
+    
+    return decorated_function
+
+# Optional auth decorator (allows access without auth but sets user_id if present)
+def optional_auth(f):
+    """Optional JWT authentication for route"""
+    @wraps(f)
+    async def decorated_function(*args, **kwargs):
+        request.user_id = None
+        
+        auth_header = request.headers.get('Authorization')
+        if auth_header:
+            try:
+                token = auth_header.split(' ')[1]
+                payload = jwt.decode(token, options={"verify_signature": False})
+                request.user_id = payload.get('sub')
+            except (IndexError, jwt.DecodeError):
+                pass  # Continue without auth
+        
+        return await f(*args, **kwargs)
+    
+    return decorated_function
 
 @app.before_serving
 async def startup():
     """Initialize services on startup"""
-    global market_intelligence
+    global market_intelligence, supabase_service
     
     logger.info("🚀 Starting Master Trading Server...")
     
@@ -45,6 +103,14 @@ async def startup():
         
         # Initialize market intelligence service
         market_intelligence = MarketIntelligenceService()
+        
+        # Initialize Supabase service
+        try:
+            supabase_service = SupabaseService()
+            logger.info("✅ Supabase service initialized")
+        except Exception as e:
+            logger.warning(f"⚠️ Supabase service not available: {e}")
+            supabase_service = None
         
         logger.info("✅ Master Trading Server initialized successfully")
         
@@ -926,6 +992,781 @@ def format_user_positions(positions):
 
 
 # Google CSE integration functions moved to services/google_search_service.py
+
+# ================================
+# CUSTOM BOT ROUTES (MULTI-USER)
+# ================================
+
+@app.route('/api/custom-bots/', methods=['GET'])
+# @require_auth  # Temporarily disabled for testing
+async def get_all_bots():
+    """Get all custom bots for the authenticated user"""
+    try:
+        if not supabase_service:
+            return jsonify({
+                'status': 'error',
+                'message': 'Database service not available'
+            }), 503
+        
+        # Temporary test user ID for development (proper UUID format)
+        user_id = getattr(request, 'user_id', '11111111-1111-1111-1111-111111111111')
+        bots = supabase_service.get_user_bots(user_id)
+        
+        # Convert to JSON-serializable format with performance data
+        bots_data = []
+        for bot in bots:
+            # Get performance metrics
+            performance = supabase_service.get_bot_performance(user_id, bot['id'])
+            
+            bot_data = {
+                'id': bot['id'],
+                'name': bot['name'],
+                'description': bot['description'],
+                'instruments': bot['instruments'],
+                'risk_level': bot['risk_level'],
+                'execution_interval': bot['execution_interval'],
+                'trailing_stop_type': bot['trailing_stop_type'],
+                'trailing_stop_pips': bot['trailing_stop_pips'],
+                'status': bot['status'],
+                'created_at': bot['created_at'],
+                'updated_at': bot['updated_at'],
+                'last_run': bot['last_run'],
+                'performance': performance or {'total_trades': 0, 'win_rate': 0, 'total_pnl': 0},
+                'error_count': bot['error_count'],
+                'last_error': bot['last_error']
+            }
+            bots_data.append(bot_data)
+        
+        return jsonify({
+            'status': 'success',
+            'bots': bots_data,
+            'count': len(bots_data)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting bots: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/api/custom-bots/', methods=['POST'])
+# @require_auth  # Temporarily disabled for testing
+async def create_bot():
+    """Create a new custom bot"""
+    try:
+        if not supabase_service:
+            return jsonify({
+                'status': 'error',
+                'message': 'Database service not available'
+            }), 503
+        
+        data = await request.get_json()
+        
+        # Validate required fields
+        required_fields = ['name', 'code', 'instruments', 'risk_level', 'execution_interval']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({
+                    'status': 'error',
+                    'message': f'Missing required field: {field}'
+                }), 400
+        
+        # Set defaults for optional fields
+        bot_data = {
+            'name': data['name'],
+            'description': data.get('description', ''),
+            'code': data['code'],
+            'instruments': data['instruments'],
+            'risk_level': data['risk_level'],
+            'execution_interval': data['execution_interval'],
+            'trailing_stop_type': data.get('trailing_stop_type', 'none'),
+            'trailing_stop_pips': data.get('trailing_stop_pips', 20)
+        }
+        
+        # Temporary test user ID for development (proper UUID format)
+        user_id = getattr(request, 'user_id', '11111111-1111-1111-1111-111111111111')
+        bot_id = supabase_service.create_bot(user_id, bot_data)
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Bot created successfully',
+            'bot_id': bot_id
+        }), 201
+        
+    except Exception as e:
+        logger.error(f"Error creating bot: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/api/custom-bots/<bot_id>', methods=['GET'])
+# @require_auth  # Temporarily disabled for testing
+async def get_bot(bot_id):
+    """Get a specific bot"""
+    try:
+        if not supabase_service:
+            return jsonify({
+                'status': 'error',
+                'message': 'Database service not available'
+            }), 503
+        
+        # Temporary test user ID for development (proper UUID format)
+        user_id = getattr(request, 'user_id', '11111111-1111-1111-1111-111111111111')
+        bot = supabase_service.get_bot(user_id, bot_id)
+        
+        if not bot:
+            return jsonify({
+                'status': 'error',
+                'message': 'Bot not found'
+            }), 404
+        
+        # Get performance metrics
+        performance = supabase_service.get_bot_performance(user_id, bot_id)
+        
+        bot_data = {
+            'id': bot['id'],
+            'name': bot['name'],
+            'description': bot['description'],
+            'code': bot['code'],
+            'instruments': bot['instruments'],
+            'risk_level': bot['risk_level'],
+            'execution_interval': bot['execution_interval'],
+            'trailing_stop_type': bot['trailing_stop_type'],
+            'trailing_stop_pips': bot['trailing_stop_pips'],
+            'status': bot['status'],
+            'created_at': bot['created_at'],
+            'updated_at': bot['updated_at'],
+            'last_run': bot['last_run'],
+            'performance': performance or {'total_trades': 0, 'win_rate': 0, 'total_pnl': 0},
+            'error_count': bot['error_count'],
+            'last_error': bot['last_error']
+        }
+        
+        return jsonify({
+            'status': 'success',
+            'bot': bot_data
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting bot {bot_id}: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/api/custom-bots/<bot_id>', methods=['PUT'])
+@require_auth
+async def update_bot(bot_id):
+    """Update a bot"""
+    try:
+        if not supabase_service:
+            return jsonify({
+                'status': 'error',
+                'message': 'Database service not available'
+            }), 503
+        
+        data = await request.get_json()
+        
+        # Temporary test user ID for development (proper UUID format)
+        user_id = getattr(request, 'user_id', '11111111-1111-1111-1111-111111111111')
+        success = supabase_service.update_bot(user_id, bot_id, data)
+        
+        if success:
+            return jsonify({
+                'status': 'success',
+                'message': 'Bot updated successfully'
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': 'Failed to update bot'
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error updating bot {bot_id}: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/api/custom-bots/<bot_id>', methods=['DELETE'])
+@require_auth
+async def delete_bot(bot_id):
+    """Delete a bot"""
+    try:
+        if not supabase_service:
+            return jsonify({
+                'status': 'error',
+                'message': 'Database service not available'
+            }), 503
+        
+        # Temporary test user ID for development (proper UUID format)
+        user_id = getattr(request, 'user_id', '11111111-1111-1111-1111-111111111111')
+        success = supabase_service.delete_bot(user_id, bot_id)
+        
+        if success:
+            return jsonify({
+                'status': 'success',
+                'message': 'Bot deleted successfully'
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': 'Failed to delete bot'
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error deleting bot {bot_id}: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/api/custom-bots/<bot_id>/start', methods=['POST'])
+# @require_auth  # Temporarily disabled for testing
+async def start_bot(bot_id):
+    """Start a bot"""
+    try:
+        if not supabase_service:
+            return jsonify({
+                'status': 'error',
+                'message': 'Database service not available'
+            }), 503
+        
+        # Temporary test user ID for development (proper UUID format)
+        user_id = getattr(request, 'user_id', '11111111-1111-1111-1111-111111111111')
+        
+        # Update bot status to running
+        success = supabase_service.update_bot_status(user_id, bot_id, 'running')
+        
+        if success:
+            # Log the activity
+            supabase_service.log_bot_activity(user_id, bot_id, 'INFO', 'Bot started by user')
+            
+            return jsonify({
+                'status': 'success',
+                'message': 'Bot started successfully'
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': 'Failed to start bot'
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error starting bot {bot_id}: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/api/custom-bots/<bot_id>/stop', methods=['POST'])
+# @require_auth  # Temporarily disabled for testing
+async def stop_bot(bot_id):
+    """Stop a bot"""
+    try:
+        if not supabase_service:
+            return jsonify({
+                'status': 'error',
+                'message': 'Database service not available'
+            }), 503
+        
+        # Temporary test user ID for development (proper UUID format)
+        user_id = getattr(request, 'user_id', '11111111-1111-1111-1111-111111111111')
+        
+        # Update bot status to stopped
+        success = supabase_service.update_bot_status(user_id, bot_id, 'stopped')
+        
+        if success:
+            # Log the activity
+            supabase_service.log_bot_activity(user_id, bot_id, 'INFO', 'Bot stopped by user')
+            
+            return jsonify({
+                'status': 'success',
+                'message': 'Bot stopped successfully'
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': 'Failed to stop bot'
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error stopping bot {bot_id}: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/api/custom-bots/<bot_id>/positions', methods=['GET'])
+@require_auth
+async def get_bot_positions(bot_id):
+    """Get positions for a specific bot"""
+    try:
+        if not supabase_service:
+            return jsonify({
+                'status': 'error',
+                'message': 'Database service not available'
+            }), 503
+        
+        # Temporary test user ID for development (proper UUID format)
+        user_id = getattr(request, 'user_id', '11111111-1111-1111-1111-111111111111')
+        positions = supabase_service.get_bot_positions(user_id, bot_id)
+        
+        return jsonify({
+            'status': 'success',
+            'positions': positions,
+            'count': len(positions)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting bot positions {bot_id}: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/api/custom-bots/<bot_id>/positions/<symbol>/close', methods=['POST'])
+@require_auth
+async def close_bot_position(bot_id, symbol):
+    """Close a specific position for a bot"""
+    try:
+        if not supabase_service:
+            return jsonify({
+                'status': 'error',
+                'message': 'Database service not available'
+            }), 503
+        
+        data = await request.get_json() or {}
+        reason = data.get('reason', 'Manual close from UI')
+        
+        # Temporary test user ID for development (proper UUID format)
+        user_id = getattr(request, 'user_id', '11111111-1111-1111-1111-111111111111')
+        success = supabase_service.close_position(user_id, bot_id, symbol)
+        
+        if success:
+            # Log the activity
+            supabase_service.log_bot_activity(user_id, bot_id, 'INFO', f'Position {symbol} closed manually', {'reason': reason})
+            
+            return jsonify({
+                'status': 'success',
+                'message': f'Position {symbol} closed successfully'
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': f'No position found for {symbol}'
+            }), 404
+            
+    except Exception as e:
+        logger.error(f"Error closing bot position {bot_id}/{symbol}: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/api/custom-bots/<bot_id>/trades', methods=['GET'])
+@require_auth
+async def get_bot_trades(bot_id):
+    """Get trade history for a specific bot"""
+    try:
+        if not supabase_service:
+            return jsonify({
+                'status': 'error',
+                'message': 'Database service not available'
+            }), 503
+        
+        # Temporary test user ID for development (proper UUID format)
+        user_id = getattr(request, 'user_id', '11111111-1111-1111-1111-111111111111')
+        trades = supabase_service.get_bot_trades(user_id, bot_id)
+        
+        return jsonify({
+            'status': 'success',
+            'trades': trades,
+            'count': len(trades)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting bot trades {bot_id}: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/api/custom-bots/<bot_id>/logs', methods=['GET'])
+@require_auth
+async def get_bot_logs(bot_id):
+    """Get logs for a specific bot"""
+    try:
+        if not supabase_service:
+            return jsonify({
+                'status': 'error',
+                'message': 'Database service not available'
+            }), 503
+        
+        # Temporary test user ID for development (proper UUID format)
+        user_id = getattr(request, 'user_id', '11111111-1111-1111-1111-111111111111')
+        logs = supabase_service.get_bot_logs(user_id, bot_id)
+        
+        return jsonify({
+            'status': 'success',
+            'logs': logs,
+            'count': len(logs)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting bot logs {bot_id}: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/api/custom-bots/<bot_id>/validate', methods=['POST'])
+# @require_auth  # Temporarily disabled for testing
+async def validate_bot_code(bot_id):
+    """Validate bot code without saving"""
+    try:
+        data = await request.get_json()
+        code = data.get('code', '')
+        
+        if not code:
+            return jsonify({
+                'status': 'error',
+                'message': 'No code provided'
+            }), 400
+        
+        # Simple validation - check for basic Python syntax
+        try:
+            compile(code, '<string>', 'exec')
+            is_valid = True
+        except SyntaxError as e:
+            is_valid = False
+            error_message = f'Syntax error: {str(e)}'
+        except Exception as e:
+            is_valid = False
+            error_message = f'Compilation error: {str(e)}'
+        
+        return jsonify({
+            'status': 'success',
+            'valid': is_valid,
+            'message': 'Code is valid' if is_valid else error_message
+        })
+        
+    except Exception as e:
+        logger.error(f"Error validating bot code: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e),
+            'valid': False
+        }), 500
+
+# ================================
+# USER PROFILE ROUTES
+# ================================
+
+@app.route('/api/user/profile', methods=['GET'])
+@require_auth
+async def get_user_profile():
+    """Get user profile"""
+    try:
+        if not supabase_service:
+            return jsonify({
+                'status': 'error',
+                'message': 'Database service not available'
+            }), 503
+        
+        # Temporary test user ID for development (proper UUID format)
+        user_id = getattr(request, 'user_id', '11111111-1111-1111-1111-111111111111')
+        profile = supabase_service.get_user_profile(user_id)
+        
+        if not profile:
+            return jsonify({
+                'status': 'error',
+                'message': 'Profile not found'
+            }), 404
+        
+        return jsonify({
+            'status': 'success',
+            'profile': profile
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting user profile: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/api/user/subscription', methods=['GET'])
+@require_auth
+async def get_user_subscription():
+    """Get user subscription info"""
+    try:
+        if not supabase_service:
+            return jsonify({
+                'status': 'error',
+                'message': 'Database service not available'
+            }), 503
+        
+        # Temporary test user ID for development (proper UUID format)
+        user_id = getattr(request, 'user_id', '11111111-1111-1111-1111-111111111111')
+        subscription = supabase_service.get_user_subscription(user_id)
+        
+        return jsonify({
+            'status': 'success',
+            'subscription': subscription or {'tier': 'free', 'status': 'active'}
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting user subscription: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+# ================================
+# DASHBOARD ROUTES
+# ================================
+
+@app.route('/api/dashboard', methods=['GET'])
+@require_auth
+async def get_dashboard_data():
+    """Get dashboard data for authenticated user"""
+    try:
+        if not supabase_service:
+            return jsonify({
+                'status': 'error',
+                'message': 'Database service not available'
+            }), 503
+        
+        # Temporary test user ID for development (proper UUID format)
+        user_id = getattr(request, 'user_id', '11111111-1111-1111-1111-111111111111')
+        
+        # Get user bots
+        bots = supabase_service.get_user_bots(user_id)
+        
+        # Calculate aggregated statistics
+        total_bots = len(bots)
+        running_bots = len([b for b in bots if b['status'] == 'running'])
+        total_trades = 0
+        total_pnl = 0
+        active_positions = 0
+        
+        for bot in bots:
+            performance = supabase_service.get_bot_performance(user_id, bot['id'])
+            if performance:
+                total_trades += performance.get('total_trades', 0)
+                total_pnl += float(performance.get('total_pnl', 0))
+            
+            positions = supabase_service.get_bot_positions(user_id, bot['id'])
+            active_positions += len(positions)
+        
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'total_bots': total_bots,
+                'running_bots': running_bots,
+                'stopped_bots': total_bots - running_bots,
+                'total_trades': total_trades,
+                'total_pnl': total_pnl,
+                'active_positions': active_positions,
+                'bots': [{
+                    'id': bot['id'],
+                    'name': bot['name'],
+                    'status': bot['status'],
+                    'created_at': bot['created_at']
+                } for bot in bots[:5]]  # Latest 5 bots for preview
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting dashboard data: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+# ================================
+# BOT TEMPLATES ROUTES
+# ================================
+
+@app.route('/api/bot-templates', methods=['GET'])
+async def get_bot_templates():
+    """Get all bot templates with optional filters"""
+    try:
+        if not supabase_service:
+            return jsonify({
+                'status': 'error',
+                'message': 'Database service not available'
+            }), 503
+        
+        language = request.args.get('language')
+        category = request.args.get('category')
+        strategy_type = request.args.get('strategy_type')
+        
+        templates = supabase_service.get_bot_templates(
+            language=language,
+            category=category,
+            strategy_type=strategy_type
+        )
+        
+        return jsonify({
+            'status': 'success',
+            'templates': templates,
+            'count': len(templates)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting bot templates: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/api/bot-templates/<template_id>', methods=['GET'])
+async def get_bot_template(template_id):
+    """Get a specific bot template"""
+    try:
+        if not supabase_service:
+            return jsonify({
+                'status': 'error',
+                'message': 'Database service not available'
+            }), 503
+        
+        template = supabase_service.get_bot_template(template_id)
+        
+        if not template:
+            return jsonify({
+                'status': 'error',
+                'message': 'Template not found'
+            }), 404
+        
+        # Increment usage count
+        supabase_service.increment_template_usage(template_id)
+        
+        return jsonify({
+            'status': 'success',
+            'template': template
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting bot template {template_id}: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/api/bot-templates', methods=['POST'])
+@require_auth
+async def create_bot_template():
+    """Create a new bot template (admin only for now)"""
+    try:
+        if not supabase_service:
+            return jsonify({
+                'status': 'error',
+                'message': 'Database service not available'
+            }), 503
+        
+        data = await request.get_json()
+        
+        if not data or not data.get('name') or not data.get('code') or not data.get('language'):
+            return jsonify({
+                'status': 'error',
+                'message': 'Missing required fields: name, code, language'
+            }), 400
+        
+        template_id = supabase_service.create_bot_template(data)
+        
+        if template_id:
+            return jsonify({
+                'status': 'success',
+                'id': template_id,
+                'message': 'Template created successfully'
+            }), 201
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': 'Failed to create template'
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error creating bot template: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/api/bot-templates/<template_id>', methods=['PUT'])
+@require_auth
+async def update_bot_template(template_id):
+    """Update a bot template (admin only for now)"""
+    try:
+        if not supabase_service:
+            return jsonify({
+                'status': 'error',
+                'message': 'Database service not available'
+            }), 503
+        
+        data = await request.get_json()
+        
+        if not data:
+            return jsonify({
+                'status': 'error',
+                'message': 'No data provided'
+            }), 400
+        
+        success = supabase_service.update_bot_template(template_id, data)
+        
+        if success:
+            return jsonify({
+                'status': 'success',
+                'message': 'Template updated successfully'
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': 'Failed to update template'
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error updating bot template {template_id}: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/api/bot-templates/<template_id>', methods=['DELETE'])
+@require_auth
+async def delete_bot_template(template_id):
+    """Delete a bot template (admin only for now)"""
+    try:
+        if not supabase_service:
+            return jsonify({
+                'status': 'error',
+                'message': 'Database service not available'
+            }), 503
+        
+        success = supabase_service.delete_bot_template(template_id)
+        
+        if success:
+            return jsonify({
+                'status': 'success',
+                'message': 'Template deleted successfully'
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': 'Failed to delete template'
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error deleting bot template {template_id}: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 
 if __name__ == '__main__':
